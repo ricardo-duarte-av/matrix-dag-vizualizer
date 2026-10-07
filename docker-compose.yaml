@@ -1,0 +1,21 @@
+services:
+  dagviz:
+    image: ghcr.io/ricardo-duarte-av/matrix-dag-vizualizer:latest
+    # Or build locally instead of pulling:
+    # build: .
+    container_name: dagviz
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Copy sample.config.yaml to config.yaml and edit it.
+      - ./config.yaml:/config/config.yaml:ro
+      # Persists the Matrix login session so restarts don't create new devices.
+      - dagviz-data:/data
+    # Secrets may be kept out of config.yaml:
+    # environment:
+    #   DAGVIZ_MATRIX_PASSWORD: "..."
+    #   DAGVIZ_WEB_BASIC_AUTH_PASSWORD: "..."
+
+volumes:
+  dagviz-data:

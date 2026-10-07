@@ -1,0 +1,94 @@
+# Matrix DAG Visualizer configuration.
+# Copy to config.yaml and adjust. Every option is shown with its default value.
+# Secrets can also be supplied through environment variables (see the comments).
+
+matrix:
+  # Homeserver to connect to. Either a full client API URL
+  # (https://matrix.example.org) or a bare server name (example.org), in which
+  # case .well-known/matrix/client discovery is used.
+  # Env: DAGVIZ_MATRIX_HOMESERVER
+  homeserver: example.org
+
+  # Account the visualizer logs in as. Its joined rooms become viewable.
+  # If the account is a Synapse server admin this is detected automatically and
+  # enables: browsing every room on the server, fetching missing events with
+  # the admin fetch_event API, and showing the server's real forward extremities.
+  # Env: DAGVIZ_MATRIX_USER_ID
+  user_id: "@dagviz:example.org"
+
+  # Authenticate with either a password or an existing access token.
+  # With a password the resulting session is stored in data_dir/session.json and
+  # reused on restart, so no new device is created every time.
+  # Env: DAGVIZ_MATRIX_PASSWORD / DAGVIZ_MATRIX_ACCESS_TOKEN
+  password: "change-me"
+  access_token: ""
+
+  # Optional fixed device ID, and the display name of the device created at login.
+  device_id: ""
+  device_name: "Matrix DAG Visualizer"
+
+  # Restrict the visualizer to these room IDs. Empty = all joined rooms
+  # (plus every server room when running as a Synapse admin).
+  rooms: []
+  #  - "!abcdefg:example.org"
+
+  # Automatically accept room invites sent to the account.
+  auto_join_invites: false
+
+  # Events fetched (via /messages) the first time a room is opened.
+  initial_backfill: 500
+  # Page size for /messages pagination (1-1000).
+  backfill_page_size: 100
+  # Upper bound of events kept in memory per room. When exceeded, the oldest
+  # (lowest depth) events are dropped; the m.room.create event is always kept.
+  max_events_per_room: 20000
+  # Maximum events fetched by one "Resolve missing" click (Synapse admin only).
+  resolve_budget: 200
+
+  # Long-poll timeout for /sync.
+  sync_timeout: 30s
+  # How often Synapse admin status is re-checked (granting/revoking admin is
+  # picked up without a restart).
+  admin_check_interval: 5m
+
+  # Where the login session is persisted. Mount this as a volume in Docker.
+  data_dir: /data
+
+web:
+  # Address the web UI / API listens on.
+  listen: ":8080"
+  # Serve under a sub-path, e.g. "/dagviz/" behind a reverse proxy.
+  base_path: /
+  # Title shown in the browser tab and header.
+  title: Matrix DAG Visualizer
+
+  # HTTP basic auth for the UI and API. Strongly recommended when exposed:
+  # the UI shows room contents. Leave both empty to disable.
+  # Env: DAGVIZ_WEB_BASIC_AUTH_USER / DAGVIZ_WEB_BASIC_AUTH_PASSWORD
+  basic_auth:
+    username: ""
+    password: ""
+
+  # Initial UI settings (users can change them; their choice is remembered per browser).
+  # Layout: "depth" (one row per event depth, fast for any size) or "elk"
+  # (ELK layered/Sugiyama layout, prettier but slower for thousands of events).
+  default_layout: depth
+  # Graph direction: LR (oldest on the left, time flows right; best for wide
+  # screens), RL, TB (oldest at top) or BT.
+  layout_direction: LR
+  # Draw auth_events edges in addition to prev_events.
+  show_auth_events: false
+  # Colour nodes by event "type" or by "sender".
+  color_by: type
+  # Maximum number of (most recent) events rendered at once.
+  max_render_nodes: 3000
+  # UI theme: auto (follow the OS), light or dark.
+  theme: auto
+  # Use Cytoscape's experimental WebGL renderer (faster for very large graphs).
+  webgl: false
+
+log:
+  # trace, debug, info, warn, error
+  level: info
+  # console (human readable) or json
+  format: console

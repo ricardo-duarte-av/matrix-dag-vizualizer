@@ -1,0 +1,404 @@
+import cytoscape from "cytoscape";
+import elk from "cytoscape-elk";
+import type { DagNode, DagResponse } from "./api";
+
+cytoscape.use(elk);
+
+export type Layout = "depth" | "elk";
+export type Direction = "TB" | "BT" | "LR" | "RL";
+export type ColorBy = "type" | "sender";
+
+type EdgeKind = "prev" | "auth";
+
+export interface ViewOptions {
+  layout: Layout;
+  direction: Direction;
+  colorBy: ColorBy;
+  showAuth: boolean;
+  webgl: boolean;
+}
+
+// Stable colours for the most common event types; everything else is hashed.
+const KNOWN_TYPE_COLORS: Record<string, string> = {
+  "m.room.create": "#eab308",
+  "m.room.message": "#3b82f6",
+  "m.room.encrypted": "#6366f1",
+  "m.room.member": "#22c55e",
+  "m.room.power_levels": "#ef4444",
+  "m.room.join_rules": "#f97316",
+  "m.room.history_visibility": "#a855f7",
+  "m.room.name": "#14b8a6",
+  "m.room.topic": "#06b6d4",
+  "m.room.redaction": "#64748b",
+  "m.reaction": "#ec4899",
+};
+const PALETTE = [
+  "#0ea5e9", "#84cc16", "#f43f5e", "#d946ef", "#10b981", "#f59e0b",
+  "#8b5cf6", "#06b6d4", "#e11d48", "#65a30d", "#c026d3", "#0284c7",
+];
+
+function hash(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+export function colorFor(key: string, by: ColorBy): string {
+  if (by === "type" && KNOWN_TYPE_COLORS[key]) return KNOWN_TYPE_COLORS[key];
+  return PALETTE[hash(key) % PALETTE.length];
+}
+
+const shortType = (t: string) => t.replace(/^m\.room\./, "").replace(/^m\./, "");
+const isState = (n: DagNode) => n.state_key !== undefined && n.state_key !== null;
+
+function cssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+const SPACING = { rank: 70, sibling: 60 };
+
+export class DagView {
+  readonly cy: cytoscape.Core;
+  private opts: ViewOptions;
+  private relayoutTimer = 0;
+  /** parent event ID → events referencing it, so late parents can be linked. */
+  private children = new Map<string, [string, EdgeKind][]>();
+  onSelect: (id: string | null, missing: boolean) => void = () => {};
+
+  constructor(container: HTMLElement, opts: ViewOptions) {
+    this.opts = { ...opts };
+    this.cy = cytoscape({
+      container,
+      wheelSensitivity: 0.3,
+      minZoom: 0.02,
+      maxZoom: 4,
+      boxSelectionEnabled: false,
+      webgl: opts.webgl,
+      style: this.stylesheet(),
+    });
+    this.cy.on("tap", "node", (e) => {
+      const n = e.target as cytoscape.NodeSingular;
+      this.select(n.id());
+      this.onSelect(n.id(), n.hasClass("missing"));
+    });
+    this.cy.on("tap", (e) => {
+      if (e.target === this.cy) {
+        this.clearHighlight();
+        this.onSelect(null, false);
+      }
+    });
+  }
+
+  setOptions(patch: Partial<ViewOptions>) {
+    const prev = this.opts;
+    this.opts = { ...this.opts, ...patch };
+    if (patch.colorBy && patch.colorBy !== prev.colorBy) this.recolor();
+    if (patch.showAuth !== undefined) {
+      this.cy.edges(".auth").toggleClass("hidden", !this.opts.showAuth);
+    }
+    if (
+      (patch.layout && patch.layout !== prev.layout) ||
+      (patch.direction && patch.direction !== prev.direction)
+    ) {
+      this.layout(true);
+    }
+  }
+
+  refreshTheme() {
+    this.cy.style(this.stylesheet());
+  }
+
+  /** Replace the whole graph. */
+  load(data: DagResponse) {
+    this.cy.elements().remove();
+    this.children.clear();
+    this.cy.batch(() => {
+      this.addNodes(data.nodes);
+      for (const id of data.missing) this.ensureMissing(id);
+      this.addEdges(data.nodes);
+      this.markExtremities(data.extremities, data.server_extremities);
+    });
+    this.layout(true);
+  }
+
+  /** Add live events, returns how many were new. */
+  addLive(nodes: DagNode[]): number {
+    let added = 0;
+    this.cy.batch(() => {
+      const fresh = nodes.filter((n) => {
+        const existing = this.cy.getElementById(n.id);
+        if (existing.nonempty() && !existing.hasClass("missing")) return false;
+        existing.remove();
+        return true;
+      });
+      added = fresh.length;
+      this.addNodes(fresh);
+      for (const n of fresh) {
+        for (const ref of [...n.prev, ...n.auth]) this.ensureMissing(ref);
+      }
+      this.addEdges(fresh);
+      // Recompute "computed" extremities: nodes without children.
+      this.cy.nodes(".extremity").removeClass("extremity");
+      this.cy
+        .nodes()
+        .filter((n) => !n.hasClass("missing") && n.outgoers("edge.prev").empty())
+        .addClass("extremity");
+    });
+    if (added) {
+      clearTimeout(this.relayoutTimer);
+      this.relayoutTimer = window.setTimeout(() => this.layout(false), 300);
+    }
+    return added;
+  }
+
+  private addNodes(nodes: DagNode[]) {
+    for (const n of nodes) {
+      for (const p of n.prev) this.addChild(p, n.id, "prev");
+      for (const a of n.auth) this.addChild(a, n.id, "auth");
+    }
+    this.cy.add(
+      nodes.map((n) => ({
+        group: "nodes" as const,
+        data: {
+          id: n.id,
+          label: shortType(n.type),
+          type: n.type,
+          sender: n.sender,
+          depth: n.depth,
+          ts: n.ts,
+          color: colorFor(this.opts.colorBy === "type" ? n.type : n.sender, this.opts.colorBy),
+        },
+        classes: [
+          isState(n) ? "state" : "message",
+          n.type === "m.room.create" ? "create" : "",
+        ].join(" "),
+      })),
+    );
+  }
+
+  private addChild(parent: string, child: string, kind: EdgeKind) {
+    const list = this.children.get(parent);
+    if (list) list.push([child, kind]);
+    else this.children.set(parent, [[child, kind]]);
+  }
+
+  private ensureMissing(id: string) {
+    if (this.cy.getElementById(id).nonempty()) return;
+    this.cy.add({ group: "nodes", data: { id, label: "?", depth: null, color: "" }, classes: "missing" });
+  }
+
+  private addEdges(nodes: DagNode[]) {
+    const edges: cytoscape.ElementDefinition[] = [];
+    const seen = new Set<string>();
+    const push = (from: string, to: string, kind: EdgeKind) => {
+      if (this.cy.getElementById(from).empty() || this.cy.getElementById(to).empty()) return;
+      const id = `${kind}|${from}|${to}`;
+      if (seen.has(id) || this.cy.getElementById(id).nonempty()) return;
+      seen.add(id);
+      edges.push({
+        group: "edges",
+        data: { id, source: from, target: to },
+        classes: kind === "auth" && !this.opts.showAuth ? `${kind} hidden` : kind,
+      });
+    };
+    for (const n of nodes) {
+      // Edges point forward in time: parent → child.
+      for (const p of n.prev) push(p, n.id, "prev");
+      for (const a of n.auth) push(a, n.id, "auth");
+    }
+    // A newly arrived node may be the parent of nodes added earlier (e.g. it
+    // replaced a "missing" placeholder), so reconnect those children too.
+    for (const n of nodes) {
+      for (const [child, kind] of this.children.get(n.id) ?? []) push(n.id, child, kind);
+    }
+    this.cy.add(edges);
+  }
+
+  private markExtremities(computed: string[], server?: string[]) {
+    for (const id of computed) this.cy.getElementById(id).addClass("extremity");
+    for (const id of server ?? []) this.cy.getElementById(id).addClass("server-extremity");
+  }
+
+  private recolor() {
+    this.cy.batch(() => {
+      this.cy.nodes().not(".missing").forEach((n) => {
+        const key = this.opts.colorBy === "type" ? n.data("type") : n.data("sender");
+        n.data("color", colorFor(key, this.opts.colorBy));
+      });
+    });
+  }
+
+  /** Counts per colour key, for the legend. */
+  legend(): { key: string; color: string; count: number }[] {
+    const counts = new Map<string, number>();
+    this.cy.nodes().not(".missing").forEach((n) => {
+      const key = this.opts.colorBy === "type" ? n.data("type") : n.data("sender");
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([key, count]) => ({ key, count, color: colorFor(key, this.opts.colorBy) }));
+  }
+
+  layout(fit: boolean) {
+    if (this.opts.layout === "elk") {
+      const dir = { TB: "DOWN", BT: "UP", LR: "RIGHT", RL: "LEFT" }[this.opts.direction];
+      this.cy
+        .elements()
+        .not(".auth")
+        .layout({
+          name: "elk",
+          fit,
+          padding: 30,
+          animate: false,
+          nodeDimensionsIncludeLabels: false,
+          elk: {
+            algorithm: "layered",
+            "elk.direction": dir,
+            "elk.layered.spacing.nodeNodeBetweenLayers": 40,
+            "elk.spacing.nodeNode": 25,
+            "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
+          },
+        } as cytoscape.LayoutOptions)
+        .run();
+      return;
+    }
+    this.depthLayout();
+    if (fit) this.fitRecent();
+  }
+
+  /**
+   * Places events by depth: one rank per distinct depth, siblings (events
+   * sharing a depth, i.e. forks) spread across the other axis. O(n log n).
+   */
+  private depthLayout() {
+    const nodes = this.cy.nodes();
+    // Missing nodes get a depth just above their shallowest child.
+    nodes.filter(".missing").forEach((m) => {
+      const childDepths = m.outgoers("node").map((c) => c.data("depth") as number).filter((d) => d != null);
+      m.data("depth", childDepths.length ? Math.min(...childDepths) - 1 : 0);
+    });
+    const byDepth = new Map<number, cytoscape.NodeSingular[]>();
+    nodes.forEach((n) => {
+      const d = n.data("depth") as number;
+      if (!byDepth.has(d)) byDepth.set(d, []);
+      byDepth.get(d)!.push(n);
+    });
+    const depths = [...byDepth.keys()].sort((a, b) => a - b);
+    const { direction } = this.opts;
+    const horizontal = direction === "LR" || direction === "RL";
+    const flip = direction === "BT" || direction === "RL" ? -1 : 1;
+    this.cy.batch(() => {
+      depths.forEach((d, rank) => {
+        const group = byDepth.get(d)!;
+        group.sort((a, b) => (a.data("ts") ?? 0) - (b.data("ts") ?? 0) || (a.id() < b.id() ? -1 : 1));
+        group.forEach((n, i) => {
+          const along = rank * SPACING.rank * flip;
+          const across = (i - (group.length - 1) / 2) * SPACING.sibling;
+          n.position(horizontal ? { x: along, y: across } : { x: across, y: along });
+        });
+      });
+    });
+  }
+
+  /** Fit the newest part of the graph rather than the whole history. */
+  fitRecent() {
+    const nodes = this.cy.nodes().sort((a, b) => (b.data("depth") ?? 0) - (a.data("depth") ?? 0));
+    this.cy.fit(nodes.slice(0, 60), 40);
+  }
+
+  fitAll() {
+    this.cy.fit(undefined, 30);
+  }
+
+  select(id: string): boolean {
+    const n = this.cy.getElementById(id);
+    if (n.empty()) return false;
+    this.clearHighlight();
+    this.cy.elements().addClass("faded");
+    const hood = n.closedNeighborhood();
+    hood.removeClass("faded").addClass("highlight");
+    n.addClass("focus");
+    return true;
+  }
+
+  center(id: string) {
+    const n = this.cy.getElementById(id);
+    if (n.nonempty()) this.cy.animate({ center: { eles: n }, zoom: Math.max(this.cy.zoom(), 1) }, { duration: 300 });
+  }
+
+  clearHighlight() {
+    this.cy.elements().removeClass("faded highlight focus");
+  }
+
+  private stylesheet(): cytoscape.StylesheetJson {
+    const fg = cssVar("--fg") || "#111";
+    const muted = cssVar("--muted") || "#888";
+    const edge = cssVar("--edge") || "#9ca3af";
+    const auth = cssVar("--edge-auth") || "#f59e0b";
+    const accent = cssVar("--accent") || "#6366f1";
+    const bg = cssVar("--bg") || "#fff";
+    return [
+      {
+        selector: "node",
+        style: {
+          "background-color": "data(color)",
+          width: 18,
+          height: 18,
+          label: "data(label)",
+          "font-size": 9,
+          color: fg,
+          "text-valign": "bottom",
+          "text-margin-y": 3,
+          "min-zoomed-font-size": 7,
+          "border-width": 1,
+          "border-color": bg,
+        },
+      },
+      { selector: "node.state", style: { shape: "round-rectangle" } },
+      { selector: "node.create", style: { shape: "star", width: 28, height: 28 } },
+      {
+        selector: "node.missing",
+        style: {
+          "background-opacity": 0,
+          "border-width": 2,
+          "border-style": "dashed",
+          "border-color": muted,
+          color: muted,
+          "text-valign": "center",
+          "text-margin-y": 0,
+        },
+      },
+      { selector: "node.extremity", style: { "border-width": 3, "border-color": accent } },
+      {
+        selector: "node.server-extremity",
+        style: { "border-width": 4, "border-color": accent, "border-style": "double", width: 24, height: 24 },
+      },
+      {
+        selector: "edge",
+        style: {
+          width: 1.3,
+          "line-color": edge,
+          "target-arrow-color": edge,
+          "target-arrow-shape": "triangle",
+          "arrow-scale": 0.6,
+          "curve-style": "bezier",
+        },
+      },
+      {
+        selector: "edge.auth",
+        style: { "line-style": "dashed", "line-color": auth, "target-arrow-color": auth, opacity: 0.55, width: 1 },
+      },
+      { selector: ".hidden", style: { display: "none" } },
+      { selector: ".faded", style: { opacity: 0.15 } },
+      { selector: "edge.highlight", style: { width: 2.5, opacity: 1 } },
+      {
+        selector: "node.focus",
+        style: { "border-width": 4, "border-color": fg, width: 26, height: 26, "z-index": 10 },
+      },
+    ];
+  }
+}

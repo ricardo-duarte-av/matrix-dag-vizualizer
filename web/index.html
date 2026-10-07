@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>Matrix DAG Visualizer</title>
+  </head>
+  <body>
+    <header class="toolbar">
+      <h1 id="title">Matrix DAG Visualizer</h1>
+      <div class="group">
+        <select id="room" aria-label="Room"><option value="">Loading rooms…</option></select>
+        <button id="server-rooms" class="admin-only" title="Browse every room on this server (Synapse admin)">All server rooms…</button>
+      </div>
+      <div class="group">
+        <label>Layout
+          <select id="layout">
+            <option value="depth">Depth</option>
+            <option value="elk">ELK layered</option>
+          </select>
+        </label>
+        <label>Direction
+          <select id="direction">
+            <option value="LR">→ Left → right</option>
+            <option value="RL">← Right → left</option>
+            <option value="TB">↓ Top → bottom</option>
+            <option value="BT">↑ Bottom → top</option>
+          </select>
+        </label>
+        <label>Colour
+          <select id="color-by">
+            <option value="type">by type</option>
+            <option value="sender">by sender</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="show-auth" /> auth edges</label>
+        <label class="check"><input type="checkbox" id="live" checked /> live</label>
+      </div>
+      <div class="group">
+        <button id="backfill" title="Paginate older history">Load older</button>
+        <button id="resolve" class="admin-only" title="Fetch missing referenced events via the Synapse admin API">Resolve missing</button>
+        <button id="fit" title="Fit whole graph">Fit</button>
+        <input id="search" type="search" placeholder="Jump to $event_id" spellcheck="false" />
+      </div>
+    </header>
+
+    <main>
+      <div id="cy"></div>
+      <div id="empty" class="overlay">Pick a room to render its event graph.</div>
+      <div id="loading" class="overlay hidden"><div class="spinner"></div><span id="loading-text">Loading…</span></div>
+      <aside id="legend"></aside>
+      <aside id="panel" class="hidden">
+        <button id="panel-close" class="icon" aria-label="Close">×</button>
+        <div id="panel-body"></div>
+      </aside>
+    </main>
+
+    <footer id="status"></footer>
+
+    <dialog id="server-dialog">
+      <form method="dialog" class="dialog-head">
+        <input id="server-search" type="search" placeholder="Search rooms by name, alias or ID" />
+        <button value="close" class="icon" aria-label="Close">×</button>
+      </form>
+      <div id="server-list"></div>
+    </dialog>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

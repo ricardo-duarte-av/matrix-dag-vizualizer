@@ -31,3 +31,11 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# dagviz
+/config.yaml
+/data/
+/dagviz
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
