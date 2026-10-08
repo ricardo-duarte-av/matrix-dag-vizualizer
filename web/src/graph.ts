@@ -61,6 +61,9 @@ function cssVar(name: string): string {
 }
 
 const SPACING = { rank: 70, sibling: 60 };
+/** Distance between stacked lanes of edges routed around the graph. */
+const LANE_GAP = 12;
+const ROUTE_PROPS = "curve-style edge-distances segment-weights segment-distances segment-radii";
 
 // Event-ID boxes are sized from their (monospace) text so layouts can space
 // them exactly without measuring rendered labels.
@@ -132,6 +135,7 @@ export class DagView {
 
   refreshTheme() {
     this.cy.style(this.stylesheet());
+    this.routeEdges();
   }
 
   /** Replace the whole graph. */
@@ -278,6 +282,7 @@ export class DagView {
           fit: false,
           animate: false,
           stop: () => {
+            this.routeEdges();
             if (fit) this.fitRecent();
           },
           nodeDimensionsIncludeLabels: false,
@@ -293,6 +298,7 @@ export class DagView {
       return;
     }
     this.depthLayout();
+    this.routeEdges();
     if (fit) this.fitRecent();
   }
 
@@ -341,10 +347,109 @@ export class DagView {
     });
   }
 
+  /**
+   * Routes prev edges that skip ranks (e.g. dummy events pointing at old
+   * events) through lanes beside the graph instead of straight through the
+   * events in between, where they would be hidden. Lanes are packed like a
+   * skyline: shorter edges hug the graph, longer ones stack outside them, and
+   * each edge takes whichever side of the graph is currently lower. Only
+   * used with the depth layout.
+   */
+  private routeEdges() {
+    if (this.opts.layout === "elk") {
+      // ELK already reserves room for long edges (and spreads the graph over
+      // several rows), so its edges stay straight.
+      this.cy.edges(".routed").removeStyle(ROUTE_PROPS).removeClass("routed");
+      return;
+    }
+    const horizontal = this.opts.direction === "LR" || this.opts.direction === "RL";
+    const main = (p: cytoscape.Position) => (horizontal ? p.x : p.y);
+    const perp = (p: cytoscape.Position) => (horizontal ? p.y : p.x);
+    const nodes = this.cy.nodes();
+    if (nodes.empty()) return;
+
+    // Ranks are the distinct positions along the main axis (ELK: layers).
+    const coords = nodes.map((n) => main(n.position())).sort((a, b) => a - b);
+    const ranks: number[] = [];
+    for (const c of coords) if (!ranks.length || c - ranks[ranks.length - 1] > 5) ranks.push(c);
+    const rankOf = (v: number) => {
+      let lo = 0;
+      let hi = ranks.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (ranks[mid] <= v + 5) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    };
+
+    // Skyline per side of the centre line, in half-rank slots so an edge's
+    // risers (between ranks) are accounted for: slot 2r is rank r itself.
+    const perps = nodes.map((n) => perp(n.position())).sort((a, b) => a - b);
+    const centre = perps[perps.length >> 1];
+    const sky = [new Float64Array(ranks.length * 2), new Float64Array(ranks.length * 2)];
+    const pad = this.opts.showIds ? 6 : 14; // dot labels sit below the node
+    nodes.forEach((n) => {
+      const p = perp(n.position());
+      const half = (horizontal ? n.outerHeight() : n.outerWidth()) / 2 + pad;
+      const slot = rankOf(main(n.position())) * 2;
+      sky[0][slot] = Math.max(sky[0][slot], centre - (p - half));
+      sky[1][slot] = Math.max(sky[1][slot], p + half - centre);
+    });
+
+    const long: { e: cytoscape.EdgeSingular; lo: number; hi: number }[] = [];
+    this.cy.edges(".prev").forEach((e) => {
+      const a = rankOf(main(e.source().position()));
+      const b = rankOf(main(e.target().position()));
+      if (Math.abs(a - b) > 1) long.push({ e, lo: Math.min(a, b), hi: Math.max(a, b) });
+    });
+    long.sort((x, y) => x.hi - x.lo - (y.hi - y.lo));
+
+    this.cy.batch(() => {
+      this.cy.edges(".routed").removeStyle(ROUTE_PROPS).removeClass("routed");
+      for (const { e, lo, hi } of long) {
+        const top = [0, 0];
+        for (let side = 0; side < 2; side++) {
+          for (let s = lo * 2 + 1; s < hi * 2; s++) top[side] = Math.max(top[side], sky[side][s]);
+        }
+        const side = top[0] <= top[1] ? 0 : 1;
+        const h = top[side] + LANE_GAP;
+        for (let s = lo * 2 + 1; s < hi * 2; s++) sky[side][s] = h;
+        const lane = centre + (side ? h : -h);
+
+        // Segment points are offsets from the straight source→target line,
+        // along its normal (-dy, dx)/len; convert the lane position to that.
+        const sp = e.source().position();
+        const tp = e.target().position();
+        const dx = tp.x - sp.x;
+        const dy = tp.y - sp.y;
+        const len = Math.hypot(dx, dy);
+        const normal = (horizontal ? dx : -dy) / len;
+        const span = Math.abs(main(tp) - main(sp));
+        const [ra, rb] = rankOf(main(sp)) === lo ? [lo, hi] : [hi, lo];
+        const riser = (from: number, to: number) => Math.abs(ranks[to] - ranks[from]) / 2;
+        const weights = [
+          riser(ra, ra + Math.sign(rb - ra)) / span,
+          1 - riser(rb, rb + Math.sign(ra - rb)) / span,
+        ];
+        const dists = weights.map((w) => (lane - (perp(sp) + w * (perp(tp) - perp(sp)))) / normal);
+        e.addClass("routed").style({
+          "curve-style": "round-segments",
+          "edge-distances": "node-position",
+          "segment-weights": weights.join(" "),
+          "segment-distances": dists.join(" "),
+          "segment-radii": 10,
+        } as unknown as cytoscape.Css.Edge);
+      }
+    });
+  }
+
   /** Fit the newest part of the graph rather than the whole history. */
-  fitRecent() {
+  fitRecent(animate = false) {
     const nodes = this.cy.nodes().sort((a, b) => (b.data("depth") ?? 0) - (a.data("depth") ?? 0));
-    this.cy.fit(nodes.slice(0, this.opts.showIds ? 10 : 60), 40);
+    const eles = nodes.slice(0, this.opts.showIds ? 10 : 60);
+    if (animate) this.cy.animate({ fit: { eles, padding: 40 } }, { duration: 300 });
+    else this.cy.fit(eles, 40);
   }
 
   fitAll() {

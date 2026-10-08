@@ -95,6 +95,12 @@ func (c *Client) ServerRooms(ctx context.Context, search string, from, limit int
 	return resp, err
 }
 
+// CheckServerRoom returns an error unless the server knows the room.
+func (c *Client) CheckServerRoom(ctx context.Context, roomID string) error {
+	_, err := c.adminRoomInfo(ctx, roomID)
+	return err
+}
+
 func (c *Client) adminRoomInfo(ctx context.Context, roomID string) (*synapseadmin.RoomInfo, error) {
 	return c.adminClient().RoomInfo(ctx, id.RoomID(roomID))
 }

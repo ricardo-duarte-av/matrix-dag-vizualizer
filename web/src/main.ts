@@ -17,6 +17,7 @@ const els = {
   backfill: $<HTMLButtonElement>("backfill"),
   resolve: $<HTMLButtonElement>("resolve"),
   fit: $<HTMLButtonElement>("fit"),
+  latest: $<HTMLButtonElement>("latest"),
   search: $<HTMLInputElement>("search"),
   empty: $("empty"),
   loading: $("loading"),
@@ -374,6 +375,7 @@ async function main() {
   };
   els.live.onchange = () => connectStream();
   els.fit.onclick = () => view.fitAll();
+  els.latest.onclick = () => view.fitRecent(true);
   els.panelClose.onclick = () => {
     closePanel();
     writeHash(currentRoom);

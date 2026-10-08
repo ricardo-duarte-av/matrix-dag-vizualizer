@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"slices"
@@ -184,9 +185,18 @@ func (s *Server) roomFromPath(w http.ResponseWriter, r *http.Request) (string, b
 		writeError(w, http.StatusForbidden, errors.New("room is not in the configured allowlist"))
 		return "", false
 	}
-	if info, ok := s.store.Room(roomID); (!ok || !info.Joined) && !s.mx.IsAdmin() {
+	info, known := s.store.Room(roomID)
+	if (!known || !info.Joined) && !s.mx.IsAdmin() {
 		writeError(w, http.StatusNotFound, errors.New("not joined to this room"))
 		return "", false
+	}
+	// Check rooms we haven't seen yet exist before anything adds them to the
+	// store, so mistyped IDs don't end up in the room list.
+	if !known {
+		if err := s.mx.CheckServerRoom(r.Context(), roomID); err != nil {
+			writeError(w, http.StatusNotFound, fmt.Errorf("unknown room: %w", err))
+			return "", false
+		}
 	}
 	return roomID, true
 }
