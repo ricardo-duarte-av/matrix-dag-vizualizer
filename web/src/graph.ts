@@ -499,19 +499,24 @@ export class DagView {
     this.cy.elements().addClass("faded");
     const hood = n.closedNeighborhood();
     hood.removeClass("faded").addClass("highlight");
+    // Edges to the selected event's children get their own colour, so they
+    // stand out from its prev_events.
+    n.outgoers("edge.prev").addClass("child");
     n.addClass("focus");
     return true;
   }
 
   center(id: string) {
     const n = this.cy.getElementById(id);
-    if (n.nonempty()) this.cy.animate({ center: { eles: n }, zoom: Math.max(this.cy.zoom(), 1) }, { duration: 300 });
+    if (n.empty()) return;
+    this.cy.stop(); // e.g. a peek returning to the previous view
+    this.cy.animate({ center: { eles: n }, zoom: Math.max(this.cy.zoom(), 1) }, { duration: 300 });
   }
 
   /**
    * Emphasise one edge and the node at its far end (e.g. while hovering a
    * reference). If that node is off-screen, after a short dwell the view peeks
-   * at it: fitting the whole connection when that stays readable, otherwise
+   * at it (after 3 s, as this can zoom far out): fitting the whole connection when that stays readable, otherwise
    * panning to the node. unhover() returns to the previous view.
    */
   hover(edge: string, node: string) {
@@ -534,7 +539,7 @@ export class DagView {
       } else {
         this.cy.animate({ center: { eles: n } }, { duration: 300 });
       }
-    }, 400);
+    }, 3000);
   }
 
   /** Clears hover emphasis; restore=false keeps the current view after a peek. */
@@ -549,7 +554,7 @@ export class DagView {
   }
 
   clearHighlight() {
-    this.cy.elements().removeClass("faded highlight focus hover");
+    this.cy.elements().removeClass("faded highlight focus hover child");
   }
 
   private stylesheet(): cytoscape.StylesheetJson {
@@ -557,6 +562,7 @@ export class DagView {
     const muted = cssVar("--muted") || "#888";
     const edge = cssVar("--edge") || "#9ca3af";
     const auth = cssVar("--edge-auth") || "#f59e0b";
+    const child = cssVar("--edge-child") || "#c026d3";
     const accent = cssVar("--accent") || "#6366f1";
     const bg = cssVar("--bg") || "#fff";
     const box = { width: "data(w)", height: "data(h)" };
@@ -657,6 +663,7 @@ export class DagView {
       { selector: ".hidden", style: { display: "none" } },
       { selector: ".faded", style: { opacity: 0.15 } },
       { selector: "edge.highlight", style: { width: 2.5, opacity: 1 } },
+      { selector: "edge.child", style: { "line-color": child, "target-arrow-color": child } },
       // Hovered reference in the side panel; shown even if auth edges are hidden.
       {
         selector: "edge.hover",

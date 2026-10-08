@@ -25,6 +25,7 @@ const els = {
   legend: $("legend"),
   panel: $("panel"),
   panelBody: $("panel-body"),
+  panelFocus: $<HTMLButtonElement>("panel-focus"),
   panelClose: $("panel-close"),
   status: $("status"),
   dialog: $<HTMLDialogElement>("server-dialog"),
@@ -205,7 +206,11 @@ async function searchServerRooms() {
 
 // ---- Side panel -------------------------------------------------------------
 
+/** Event shown in the side panel. */
+let selectedEvent: string | null = null;
+
 function closePanel() {
+  selectedEvent = null;
   els.panel.classList.add("hidden");
   view?.clearHighlight();
 }
@@ -223,6 +228,7 @@ function refList(ids: string[], edge: (other: string) => string): string {
 
 async function showEvent(id: string, missing: boolean) {
   writeHash(currentRoom, id);
+  selectedEvent = id;
   view.unhover(false);
   els.panel.classList.remove("hidden");
   const n = nodesById.get(id);
@@ -237,12 +243,12 @@ async function showEvent(id: string, missing: boolean) {
         <dt>Time</dt><dd>${new Date(n.ts).toLocaleString()}</dd>
         ${n.summary ? `<dt>Summary</dt><dd>${escapeHTML(n.summary)}</dd>` : ""}
       </dl>
-      <h3>prev_events (${n.prev.length})</h3><ul>${refList(n.prev, (p) => edgeId("prev", p, id))}</ul>
-      <h3>Children (${children.length})</h3><ul>${refList(children, (c) => edgeId("prev", id, c))}</ul>
-      <h3>auth_events (${n.auth.length})</h3><ul>${refList(n.auth, (a) => edgeId("auth", a, id))}</ul>`
+      <h3>prev_events (${n.prev.length})</h3><ul class="prev">${refList(n.prev, (p) => edgeId("prev", p, id))}</ul>
+      <h3>Children (${children.length})</h3><ul class="child">${refList(children, (c) => edgeId("prev", id, c))}</ul>
+      <h3>auth_events (${n.auth.length})</h3><ul class="auth">${refList(n.auth, (a) => edgeId("auth", a, id))}</ul>`
     : `<h2>Missing event</h2><dl><dt>Event</dt><dd>${escapeHTML(id)}</dd></dl>
       <p class="unknown">Referenced by loaded events but not available ${missing && cfg.admin ? "in the graph yet. Use “Resolve missing” to pull it in." : "to this account (before join, history visibility or a gap). Synapse admin access can fill these in."}</p>
-      <h3>Children (${children.length})</h3><ul>${refList(children, (c) => edgeId("prev", id, c))}</ul>`;
+      <h3>Children (${children.length})</h3><ul class="child">${refList(children, (c) => edgeId("prev", id, c))}</ul>`;
   els.panelBody.innerHTML = `${header}<h3>Raw PDU</h3><pre id="raw">Loading…</pre>`;
   try {
     const raw = await api.event(currentRoom, id);
@@ -289,6 +295,7 @@ function renderLegend() {
     <div class="row"><span class="swatch ring"></span>forward extremity</div>
     <div class="row"><span class="swatch dashed"></span>missing event</div>
     <div class="row"><span class="swatch line"></span>prev_events</div>
+    <div class="row"><span class="swatch line child"></span>children of selected</div>
     <div class="row"><span class="swatch line auth"></span>auth_events</div>`;
 }
 
@@ -346,6 +353,7 @@ async function main() {
   view.onSelect = (id, missing) => {
     if (id) void showEvent(id, missing);
     else {
+      selectedEvent = null;
       els.panel.classList.add("hidden");
       writeHash(currentRoom);
     }
@@ -378,6 +386,11 @@ async function main() {
   els.live.onchange = () => connectStream();
   els.fit.onclick = () => view.fitAll();
   els.latest.onclick = () => view.fitRecent(true);
+  els.panelFocus.onclick = () => {
+    if (!selectedEvent) return;
+    view.unhover(false);
+    view.center(selectedEvent);
+  };
   els.panelClose.onclick = () => {
     closePanel();
     writeHash(currentRoom);

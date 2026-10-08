@@ -6,6 +6,7 @@
   --border: #d9dce1;
   --accent: #6366f1;
   --edge: #0d9488;
+  --edge-child: #c026d3;
   --edge-auth: #f59e0b;
   --danger: #dc2626;
   color-scheme: light;
@@ -19,6 +20,7 @@
     --border: #2b3039;
     --accent: #818cf8;
     --edge: #0d9488;
+    --edge-child: #e879f9;
     --edge-auth: #d97706;
     color-scheme: dark;
   }
@@ -31,6 +33,7 @@
   --border: #2b3039;
   --accent: #818cf8;
   --edge: #0d9488;
+  --edge-child: #e879f9;
   --edge-auth: #d97706;
   color-scheme: dark;
 }
@@ -119,6 +122,7 @@ main { position: relative; overflow: hidden; min-height: 0; }
 .swatch.ring { background: none; border: 2px solid var(--accent); }
 .swatch.dashed { background: none; border: 2px dashed var(--muted); }
 .swatch.line { width: 16px; height: 0; border-radius: 0; border-top: 2px solid var(--edge); }
+.swatch.line.child { border-top-color: var(--edge-child); }
 .swatch.line.auth { height: 5px; border-top: 2px dashed var(--edge-auth); border-radius: 50% 50% 0 0 / 100% 100% 0 0; }
 #legend hr { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
 
@@ -134,13 +138,19 @@ main { position: relative; overflow: hidden; min-height: 0; }
   border-left: 1px solid var(--border);
 }
 #panel-close { position: absolute; top: 6px; right: 6px; }
-#panel h2 { font-size: 14px; margin: 0 24px 8px 0; word-break: break-all; }
+#panel-focus { position: absolute; top: 6px; right: 36px; }
+#panel h2 { font-size: 14px; margin: 0 100px 8px 0; word-break: break-all; }
 #panel dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0 0 10px; }
 #panel dt { color: var(--muted); }
 #panel dd { margin: 0; word-break: break-all; }
 #panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 12px 0 4px; }
 #panel ul { list-style: none; margin: 0; padding: 0; }
 #panel li a { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+/* Reference lists use the same colours as their edges in the graph. */
+#panel ul.prev a { color: var(--edge); }
+#panel ul.child a { color: var(--edge-child); }
+#panel ul.auth a { color: var(--edge-auth); }
+#panel ul a.unknown { color: var(--muted); }
 #panel pre {
   font-size: 11px;
   background: var(--bg);
