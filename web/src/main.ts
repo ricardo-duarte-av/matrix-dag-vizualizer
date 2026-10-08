@@ -1,6 +1,6 @@
 import "./style.css";
 import { api, type AppConfig, type DagNode, type RoomInfo } from "./api";
-import { DagView, colorFor, type ColorBy, type Direction, type Layout, type ViewOptions } from "./graph";
+import { DagView, colorFor, edgeId, type ColorBy, type Direction, type Layout, type ViewOptions } from "./graph";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -210,18 +210,20 @@ function closePanel() {
   view?.clearHighlight();
 }
 
-function refList(ids: string[]): string {
+/** References to other events; edge(other) is the graph edge linking it to the shown event. */
+function refList(ids: string[], edge: (other: string) => string): string {
   if (!ids.length) return `<li class="unknown">none</li>`;
   return ids
     .map((id) => {
       const known = nodesById.has(id);
-      return `<li><a data-event="${escapeHTML(id)}" class="${known ? "" : "unknown"}">${escapeHTML(id)}</a>${known ? "" : " <span class='unknown'>(not loaded)</span>"}</li>`;
+      return `<li><a data-event="${escapeHTML(id)}" data-edge="${escapeHTML(edge(id))}" class="${known ? "" : "unknown"}">${escapeHTML(id)}</a>${known ? "" : " <span class='unknown'>(not loaded)</span>"}</li>`;
     })
     .join("");
 }
 
 async function showEvent(id: string, missing: boolean) {
   writeHash(currentRoom, id);
+  view.unhover(false);
   els.panel.classList.remove("hidden");
   const n = nodesById.get(id);
   const children = [...nodesById.values()].filter((c) => c.prev.includes(id)).map((c) => c.id);
@@ -235,12 +237,12 @@ async function showEvent(id: string, missing: boolean) {
         <dt>Time</dt><dd>${new Date(n.ts).toLocaleString()}</dd>
         ${n.summary ? `<dt>Summary</dt><dd>${escapeHTML(n.summary)}</dd>` : ""}
       </dl>
-      <h3>prev_events (${n.prev.length})</h3><ul>${refList(n.prev)}</ul>
-      <h3>Children (${children.length})</h3><ul>${refList(children)}</ul>
-      <h3>auth_events (${n.auth.length})</h3><ul>${refList(n.auth)}</ul>`
+      <h3>prev_events (${n.prev.length})</h3><ul>${refList(n.prev, (p) => edgeId("prev", p, id))}</ul>
+      <h3>Children (${children.length})</h3><ul>${refList(children, (c) => edgeId("prev", id, c))}</ul>
+      <h3>auth_events (${n.auth.length})</h3><ul>${refList(n.auth, (a) => edgeId("auth", a, id))}</ul>`
     : `<h2>Missing event</h2><dl><dt>Event</dt><dd>${escapeHTML(id)}</dd></dl>
       <p class="unknown">Referenced by loaded events but not available ${missing && cfg.admin ? "in the graph yet. Use “Resolve missing” to pull it in." : "to this account (before join, history visibility or a gap). Synapse admin access can fill these in."}</p>
-      <h3>Children (${children.length})</h3><ul>${refList(children)}</ul>`;
+      <h3>Children (${children.length})</h3><ul>${refList(children, (c) => edgeId("prev", id, c))}</ul>`;
   els.panelBody.innerHTML = `${header}<h3>Raw PDU</h3><pre id="raw">Loading…</pre>`;
   try {
     const raw = await api.event(currentRoom, id);
@@ -383,6 +385,14 @@ async function main() {
   els.panelBody.addEventListener("click", (e) => {
     const a = (e.target as HTMLElement).closest<HTMLElement>("a[data-event]");
     if (a?.dataset.event && !focus(a.dataset.event)) renderStatus("That event is not loaded in the graph");
+  });
+  // Hovering a reference highlights its edge and event in the graph.
+  els.panelBody.addEventListener("mouseover", (e) => {
+    const a = (e.target as HTMLElement).closest<HTMLElement>("a[data-edge]");
+    if (a?.dataset.edge && a.dataset.event) view.hover(a.dataset.edge, a.dataset.event);
+  });
+  els.panelBody.addEventListener("mouseout", (e) => {
+    if ((e.target as HTMLElement).closest("a[data-edge]")) view.unhover();
   });
   els.search.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;

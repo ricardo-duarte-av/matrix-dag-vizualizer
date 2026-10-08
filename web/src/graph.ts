@@ -8,7 +8,10 @@ export type Layout = "depth" | "elk";
 export type Direction = "TB" | "BT" | "LR" | "RL";
 export type ColorBy = "type" | "sender";
 
-type EdgeKind = "prev" | "auth";
+export type EdgeKind = "prev" | "auth";
+
+/** Cytoscape ID of the edge from parent to child. */
+export const edgeId = (kind: EdgeKind, from: string, to: string) => `${kind}|${from}|${to}`;
 
 export interface ViewOptions {
   layout: Layout;
@@ -85,6 +88,8 @@ export class DagView {
   readonly cy: cytoscape.Core;
   private opts: ViewOptions;
   private relayoutTimer = 0;
+  private hoverTimer = 0;
+  private peekFrom: { zoom: number; pan: cytoscape.Position } | null = null;
   /** parent event ID → events referencing it, so late parents can be linked. */
   private children = new Map<string, [string, EdgeKind][]>();
   onSelect: (id: string | null, missing: boolean) => void = () => {};
@@ -135,7 +140,7 @@ export class DagView {
 
   refreshTheme() {
     this.cy.style(this.stylesheet());
-    this.routeEdges();
+    this.shapeEdges();
   }
 
   /** Replace the whole graph. */
@@ -223,7 +228,7 @@ export class DagView {
     const seen = new Set<string>();
     const push = (from: string, to: string, kind: EdgeKind) => {
       if (this.cy.getElementById(from).empty() || this.cy.getElementById(to).empty()) return;
-      const id = `${kind}|${from}|${to}`;
+      const id = edgeId(kind, from, to);
       if (seen.has(id) || this.cy.getElementById(id).nonempty()) return;
       seen.add(id);
       edges.push({
@@ -282,7 +287,7 @@ export class DagView {
           fit: false,
           animate: false,
           stop: () => {
-            this.routeEdges();
+            this.shapeEdges();
             if (fit) this.fitRecent();
           },
           nodeDimensionsIncludeLabels: false,
@@ -298,7 +303,7 @@ export class DagView {
       return;
     }
     this.depthLayout();
-    this.routeEdges();
+    this.shapeEdges();
     if (fit) this.fitRecent();
   }
 
@@ -343,6 +348,37 @@ export class DagView {
           const across = (i - (group.length - 1) / 2) * spacing.sibling;
           n.position(horizontal ? { x: along, y: across } : { x: across, y: along });
         });
+      });
+    });
+  }
+
+  private shapeEdges() {
+    this.curveAuthEdges();
+    this.routeEdges();
+  }
+
+  /**
+   * Bends auth edges into arcs (always to the same side) so they read as a
+   * different kind of link from the straight prev edges. Longer edges arc
+   * higher, up to a cap.
+   */
+  private curveAuthEdges() {
+    this.cy.batch(() => {
+      this.cy.edges(".auth").forEach((e) => {
+        const s = e.source().position();
+        const t = e.target().position();
+        const len = Math.hypot(t.x - s.x, t.y - s.y);
+        // Two control points near the ends lift long edges off the line
+        // quickly instead of grazing the neighbouring events. A cubic curve
+        // peaks at 3/4 of the control distance.
+        const height = Math.min(Math.max(len * 0.3, 25), 120);
+        const w = Math.min(0.3, 120 / len);
+        e.style({
+          "curve-style": "unbundled-bezier",
+          "edge-distances": "node-position",
+          "control-point-weights": `${w} ${1 - w}`,
+          "control-point-distances": `${-height / 0.75} ${-height / 0.75}`,
+        } as unknown as cytoscape.Css.Edge);
       });
     });
   }
@@ -472,8 +508,48 @@ export class DagView {
     if (n.nonempty()) this.cy.animate({ center: { eles: n }, zoom: Math.max(this.cy.zoom(), 1) }, { duration: 300 });
   }
 
+  /**
+   * Emphasise one edge and the node at its far end (e.g. while hovering a
+   * reference). If that node is off-screen, after a short dwell the view peeks
+   * at it: fitting the whole connection when that stays readable, otherwise
+   * panning to the node. unhover() returns to the previous view.
+   */
+  hover(edge: string, node: string) {
+    this.unhover();
+    const e = this.cy.getElementById(edge).addClass("hover");
+    const n = this.cy.getElementById(node).addClass("hover");
+    if (n.empty()) return;
+    const vp = this.cy.extent();
+    const nb = n.boundingBox();
+    if (nb.x1 >= vp.x1 && nb.x2 <= vp.x2 && nb.y1 >= vp.y1 && nb.y2 <= vp.y2) return;
+    this.hoverTimer = window.setTimeout(() => {
+      this.peekFrom = { zoom: this.cy.zoom(), pan: { ...this.cy.pan() } };
+      const both = e.union(e.connectedNodes()).union(n);
+      const bb = both.boundingBox();
+      const pad = 60;
+      const fitZoom = Math.min(this.cy.width() / (bb.w + 2 * pad), this.cy.height() / (bb.h + 2 * pad));
+      this.cy.stop();
+      if (fitZoom >= this.cy.zoom() * 0.5) {
+        this.cy.animate({ fit: { eles: both, padding: pad } }, { duration: 300 });
+      } else {
+        this.cy.animate({ center: { eles: n } }, { duration: 300 });
+      }
+    }, 400);
+  }
+
+  /** Clears hover emphasis; restore=false keeps the current view after a peek. */
+  unhover(restore = true) {
+    clearTimeout(this.hoverTimer);
+    this.cy.elements(".hover").removeClass("hover");
+    if (this.peekFrom && restore) {
+      this.cy.stop();
+      this.cy.animate({ zoom: this.peekFrom.zoom, pan: this.peekFrom.pan }, { duration: 300 });
+    }
+    this.peekFrom = null;
+  }
+
   clearHighlight() {
-    this.cy.elements().removeClass("faded highlight focus");
+    this.cy.elements().removeClass("faded highlight focus hover");
   }
 
   private stylesheet(): cytoscape.StylesheetJson {
@@ -581,6 +657,22 @@ export class DagView {
       { selector: ".hidden", style: { display: "none" } },
       { selector: ".faded", style: { opacity: 0.15 } },
       { selector: "edge.highlight", style: { width: 2.5, opacity: 1 } },
+      // Hovered reference in the side panel; shown even if auth edges are hidden.
+      {
+        selector: "edge.hover",
+        style: {
+          display: "element",
+          opacity: 1,
+          width: 4,
+          "line-color": accent,
+          "target-arrow-color": accent,
+          "z-index": 20,
+        },
+      },
+      {
+        selector: "node.hover",
+        style: { opacity: 1, "underlay-color": accent, "underlay-padding": 8, "underlay-opacity": 0.45, "z-index": 20 },
+      },
       {
         selector: "node.focus",
         style: this.opts.showIds
