@@ -15,6 +15,8 @@ export interface ViewOptions {
   direction: Direction;
   colorBy: ColorBy;
   showAuth: boolean;
+  /** Render nodes as boxes containing the event type and full event ID. */
+  showIds: boolean;
   webgl: boolean;
 }
 
@@ -60,6 +62,22 @@ function cssVar(name: string): string {
 
 const SPACING = { rank: 70, sibling: 60 };
 
+// Event-ID boxes are sized from their (monospace) text so layouts can space
+// them exactly without measuring rendered labels.
+const ID_FONT = 10;
+const ID_CHAR_W = ID_FONT * 0.62;
+const ID_LINE_H = ID_FONT * 1.35;
+const ID_PAD = 8;
+
+function idBox(lines: string[]): { idLabel: string; w: number; h: number } {
+  const longest = Math.max(...lines.map((l) => l.length));
+  return {
+    idLabel: lines.join("\n"),
+    w: Math.ceil(longest * ID_CHAR_W + ID_PAD * 2),
+    h: Math.ceil(lines.length * ID_LINE_H + ID_PAD * 2),
+  };
+}
+
 export class DagView {
   readonly cy: cytoscape.Core;
   private opts: ViewOptions;
@@ -98,6 +116,11 @@ export class DagView {
     if (patch.colorBy && patch.colorBy !== prev.colorBy) this.recolor();
     if (patch.showAuth !== undefined) {
       this.cy.edges(".auth").toggleClass("hidden", !this.opts.showAuth);
+    }
+    if (patch.showIds !== undefined && patch.showIds !== prev.showIds) {
+      this.cy.style(this.stylesheet());
+      this.layout(true);
+      return;
     }
     if (
       (patch.layout && patch.layout !== prev.layout) ||
@@ -165,6 +188,7 @@ export class DagView {
         data: {
           id: n.id,
           label: shortType(n.type),
+          ...idBox([shortType(n.type), n.id]),
           type: n.type,
           sender: n.sender,
           depth: n.depth,
@@ -187,7 +211,7 @@ export class DagView {
 
   private ensureMissing(id: string) {
     if (this.cy.getElementById(id).nonempty()) return;
-    this.cy.add({ group: "nodes", data: { id, label: "?", depth: null, color: "" }, classes: "missing" });
+    this.cy.add({ group: "nodes", data: { id, label: "?", depth: null, color: "", ...idBox(["missing", id]) }, classes: "missing" });
   }
 
   private addEdges(nodes: DagNode[]) {
@@ -251,9 +275,11 @@ export class DagView {
         .not(".auth")
         .layout({
           name: "elk",
-          fit,
-          padding: 30,
+          fit: false,
           animate: false,
+          stop: () => {
+            if (fit) this.fitRecent();
+          },
           nodeDimensionsIncludeLabels: false,
           elk: {
             algorithm: "layered",
@@ -291,13 +317,24 @@ export class DagView {
     const { direction } = this.opts;
     const horizontal = direction === "LR" || direction === "RL";
     const flip = direction === "BT" || direction === "RL" ? -1 : 1;
+    const spacing = { ...SPACING };
+    if (this.opts.showIds) {
+      let maxW = 0;
+      let maxH = 0;
+      nodes.forEach((n) => {
+        maxW = Math.max(maxW, n.data("w"));
+        maxH = Math.max(maxH, n.data("h"));
+      });
+      spacing.rank = (horizontal ? maxW : maxH) + 50;
+      spacing.sibling = (horizontal ? maxH : maxW) + 25;
+    }
     this.cy.batch(() => {
       depths.forEach((d, rank) => {
         const group = byDepth.get(d)!;
         group.sort((a, b) => (a.data("ts") ?? 0) - (b.data("ts") ?? 0) || (a.id() < b.id() ? -1 : 1));
         group.forEach((n, i) => {
-          const along = rank * SPACING.rank * flip;
-          const across = (i - (group.length - 1) / 2) * SPACING.sibling;
+          const along = rank * spacing.rank * flip;
+          const across = (i - (group.length - 1) / 2) * spacing.sibling;
           n.position(horizontal ? { x: along, y: across } : { x: across, y: along });
         });
       });
@@ -307,7 +344,7 @@ export class DagView {
   /** Fit the newest part of the graph rather than the whole history. */
   fitRecent() {
     const nodes = this.cy.nodes().sort((a, b) => (b.data("depth") ?? 0) - (a.data("depth") ?? 0));
-    this.cy.fit(nodes.slice(0, 60), 40);
+    this.cy.fit(nodes.slice(0, this.opts.showIds ? 10 : 60), 40);
   }
 
   fitAll() {
@@ -341,6 +378,49 @@ export class DagView {
     const auth = cssVar("--edge-auth") || "#f59e0b";
     const accent = cssVar("--accent") || "#6366f1";
     const bg = cssVar("--bg") || "#fff";
+    const box = { width: "data(w)", height: "data(h)" };
+    // Overrides for event-ID mode: tinted boxes outlined in the node colour;
+    // extremity/focus markers move to the outline so the border keeps the colour.
+    const idRules: cytoscape.StylesheetJson = !this.opts.showIds
+      ? []
+      : [
+          {
+            selector: "node",
+            style: {
+              ...box,
+              shape: "round-rectangle",
+              label: "data(idLabel)",
+              "font-family": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+              "font-size": ID_FONT,
+              "text-valign": "center",
+              "text-margin-y": 0,
+              "text-wrap": "wrap",
+              "text-max-width": "2000px",
+              "text-justification": "left",
+              "background-opacity": 0.15,
+              "border-width": 2,
+              "border-color": "data(color)",
+            },
+          },
+          { selector: "node.state", style: { "background-opacity": 0.35 } },
+          { selector: "node.create", style: { ...box, shape: "round-rectangle", "border-width": 4 } },
+          { selector: "node.missing", style: { "border-color": muted, "border-style": "dashed", color: muted } },
+          {
+            selector: "node.extremity",
+            style: { "border-color": "data(color)", "outline-width": 3, "outline-color": accent, "outline-offset": 2 },
+          },
+          {
+            selector: "node.server-extremity",
+            style: {
+              ...box,
+              "border-style": "solid",
+              "border-color": "data(color)",
+              "outline-width": 5,
+              "outline-color": accent,
+              "outline-offset": 2,
+            },
+          },
+        ];
     return [
       {
         selector: "node",
@@ -377,6 +457,7 @@ export class DagView {
         selector: "node.server-extremity",
         style: { "border-width": 4, "border-color": accent, "border-style": "double", width: 24, height: 24 },
       },
+      ...idRules,
       {
         selector: "edge",
         style: {
@@ -397,7 +478,9 @@ export class DagView {
       { selector: "edge.highlight", style: { width: 2.5, opacity: 1 } },
       {
         selector: "node.focus",
-        style: { "border-width": 4, "border-color": fg, width: 26, height: 26, "z-index": 10 },
+        style: this.opts.showIds
+          ? { "outline-width": 4, "outline-color": fg, "outline-offset": 2, "z-index": 10 }
+          : { "border-width": 4, "border-color": fg, width: 26, height: 26, "z-index": 10 },
       },
     ];
   }

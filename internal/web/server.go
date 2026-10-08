@@ -123,6 +123,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		"default_layout":   s.cfg.DefaultLayout,
 		"layout_direction": s.cfg.LayoutDirection,
 		"show_auth_events": s.cfg.ShowAuthEvents,
+		"show_event_ids":   s.cfg.ShowEventIDs,
 		"color_by":         s.cfg.ColorBy,
 		"max_render_nodes": s.cfg.MaxRenderNodes,
 		"theme":            s.cfg.Theme,

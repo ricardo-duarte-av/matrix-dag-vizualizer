@@ -78,6 +78,9 @@ web:
   layout_direction: LR
   # Draw auth_events edges in addition to prev_events.
   show_auth_events: false
+  # Render each event as a larger box containing its type and full event ID
+  # (instead of a small dot with the type underneath).
+  show_event_ids: false
   # Colour nodes by event "type" or by "sender".
   color_by: type
   # Maximum number of (most recent) events rendered at once.

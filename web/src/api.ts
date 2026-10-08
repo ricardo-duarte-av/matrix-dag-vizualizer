@@ -3,6 +3,7 @@ export interface AppConfig {
   default_layout: "depth" | "elk";
   layout_direction: "TB" | "BT" | "LR" | "RL";
   show_auth_events: boolean;
+  show_event_ids: boolean;
   color_by: "type" | "sender";
   max_render_nodes: number;
   theme: "auto" | "light" | "dark";

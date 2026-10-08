@@ -12,6 +12,7 @@ const els = {
   direction: $<HTMLSelectElement>("direction"),
   colorBy: $<HTMLSelectElement>("color-by"),
   showAuth: $<HTMLInputElement>("show-auth"),
+  showIds: $<HTMLInputElement>("show-ids"),
   live: $<HTMLInputElement>("live"),
   backfill: $<HTMLButtonElement>("backfill"),
   resolve: $<HTMLButtonElement>("resolve"),
@@ -31,7 +32,7 @@ const els = {
 };
 
 const PREFS_KEY = "dagviz.prefs";
-type Prefs = Partial<Pick<ViewOptions, "layout" | "direction" | "colorBy" | "showAuth">>;
+type Prefs = Partial<Pick<ViewOptions, "layout" | "direction" | "colorBy" | "showAuth" | "showIds">>;
 
 function loadPrefs(): Prefs {
   try {
@@ -329,12 +330,14 @@ async function main() {
     direction: prefs.direction ?? cfg.layout_direction,
     colorBy: prefs.colorBy ?? cfg.color_by,
     showAuth: prefs.showAuth ?? cfg.show_auth_events,
+    showIds: prefs.showIds ?? cfg.show_event_ids,
     webgl: cfg.webgl,
   };
   els.layout.value = opts.layout;
   els.direction.value = opts.direction;
   els.colorBy.value = opts.colorBy;
   els.showAuth.checked = opts.showAuth;
+  els.showIds.checked = opts.showIds;
 
   view = new DagView($("cy"), opts);
   view.onSelect = (id, missing) => {
@@ -364,6 +367,10 @@ async function main() {
   els.showAuth.onchange = () => {
     view.setOptions({ showAuth: els.showAuth.checked });
     savePrefs({ showAuth: els.showAuth.checked });
+  };
+  els.showIds.onchange = () => {
+    view.setOptions({ showIds: els.showIds.checked });
+    savePrefs({ showIds: els.showIds.checked });
   };
   els.live.onchange = () => connectStream();
   els.fit.onclick = () => view.fitAll();

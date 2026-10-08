@@ -50,6 +50,7 @@ type WebConfig struct {
 	DefaultLayout   string `yaml:"default_layout"`
 	LayoutDirection string `yaml:"layout_direction"`
 	ShowAuthEvents  bool   `yaml:"show_auth_events"`
+	ShowEventIDs    bool   `yaml:"show_event_ids"`
 	ColorBy         string `yaml:"color_by"`
 	MaxRenderNodes  int    `yaml:"max_render_nodes"`
 	Theme           string `yaml:"theme"`
