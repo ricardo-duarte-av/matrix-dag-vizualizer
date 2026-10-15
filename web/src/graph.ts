@@ -66,6 +66,13 @@ function cssVar(name: string): string {
 const SPACING = { rank: 70, sibling: 60 };
 /** Distance between stacked lanes of edges routed around the graph. */
 const LANE_GAP = 12;
+/**
+ * Lanes stacked beyond the graph on each side, at most. Rooms full of dummy
+ * events have thousands of overlapping long edges; without a cap the outer
+ * lanes end up tens of thousands of pixels away and the edges look missing.
+ * Edges past the cap share the outermost lane.
+ */
+const MAX_LANES = 24;
 const ROUTE_PROPS = "curve-style edge-distances segment-weights segment-distances segment-radii";
 
 // Event-ID boxes are sized from their (monospace) text so layouts can space
@@ -447,6 +454,8 @@ export class DagView {
       sky[1][slot] = Math.max(sky[1][slot], p + half - centre);
     });
 
+    const cap = sky.map((side) => side.reduce((a, b) => Math.max(a, b), 0) + MAX_LANES * LANE_GAP);
+
     const long: { e: cytoscape.EdgeSingular; lo: number; hi: number }[] = [];
     this.cy.edges(".prev").forEach((e) => {
       const a = rankOf(main(e.source().position()));
@@ -463,7 +472,7 @@ export class DagView {
           for (let s = lo * 2 + 1; s < hi * 2; s++) top[side] = Math.max(top[side], sky[side][s]);
         }
         const side = top[0] <= top[1] ? 0 : 1;
-        const h = top[side] + LANE_GAP;
+        const h = Math.min(top[side] + LANE_GAP, cap[side]);
         for (let s = lo * 2 + 1; s < hi * 2; s++) sky[side][s] = h;
         const lane = centre + (side ? h : -h);
 
