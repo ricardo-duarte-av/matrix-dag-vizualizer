@@ -138,16 +138,22 @@ func (s *Store) Rooms() []RoomInfo {
 // Add inserts events into a room and notifies subscribers of the ones that
 // were new. It returns the newly added nodes.
 func (s *Store) Add(roomID string, events []json.RawMessage, fallbackIDs ...string) ([]*Node, []error) {
-	return s.add(roomID, events, false, fallbackIDs)
+	return s.add(roomID, events, false, fallbackIDs, "")
+}
+
+// AddRemote is Add for events fetched from another server over federation,
+// which the homeserver itself doesn't have.
+func (s *Store) AddRemote(roomID, server string, events []json.RawMessage, ids []string) ([]*Node, []error) {
+	return s.add(roomID, events, false, ids, server)
 }
 
 // AddTimeline is Add for a contiguous timeline batch (/messages chunk or
 // /sync timeline): it also lowers the room's Floor to the batch's oldest event.
 func (s *Store) AddTimeline(roomID string, events []json.RawMessage) ([]*Node, []error) {
-	return s.add(roomID, events, true, nil)
+	return s.add(roomID, events, true, nil, "")
 }
 
-func (s *Store) add(roomID string, events []json.RawMessage, timeline bool, fallbackIDs []string) ([]*Node, []error) {
+func (s *Store) add(roomID string, events []json.RawMessage, timeline bool, fallbackIDs []string, source string) ([]*Node, []error) {
 	var errs []error
 	s.mu.Lock()
 	r := s.ensure(roomID)
@@ -162,6 +168,7 @@ func (s *Store) add(roomID string, events []json.RawMessage, timeline bool, fall
 			errs = append(errs, err)
 			continue
 		}
+		n.Source = source
 		if timeline && n.Depth > 0 && (r.Floor == 0 || n.Depth < r.Floor) {
 			r.Floor = n.Depth
 		}

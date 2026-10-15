@@ -12,6 +12,8 @@ export interface AppConfig {
   homeserver: string;
   admin: boolean;
   room_allowlist: boolean;
+  /** Servers events can be fetched from over federation; null when disabled. */
+  federation_servers: string[] | null;
 }
 
 export interface RoomInfo {
@@ -21,6 +23,8 @@ export interface RoomInfo {
   joined: boolean;
   event_count: number;
   backfill_done: boolean;
+  /** Depth of the oldest loaded timeline event (0: none yet). */
+  floor: number;
 }
 
 export interface ServerRoom {
@@ -48,6 +52,8 @@ export interface DagNode {
   prev: string[];
   auth: string[];
   summary?: string;
+  /** Remote server the event was fetched from over federation. */
+  source?: string;
 }
 
 export interface DagResponse {
@@ -88,11 +94,15 @@ export const api = {
       `${room(roomId)}/resolve${budget ? `?budget=${budget}` : ""}`,
       { method: "POST" },
     ),
-  resolveEvent: (roomId: string, eventId: string) =>
-    request<{ resolved: number; remaining: number }>(
-      `${room(roomId)}/resolve?id=${encodeURIComponent(eventId)}`,
+  /** Fetches specific missing events, optionally from one federation server only. */
+  resolveEvents: (roomId: string, eventIds: string[], server?: string) => {
+    const q = new URLSearchParams(eventIds.map((id) => ["id", id]));
+    if (server) q.set("server", server);
+    return request<{ resolved: number; missing: string[] | null; remaining: number }>(
+      `${room(roomId)}/resolve?${q}`,
       { method: "POST" },
-    ),
+    );
+  },
   event: (roomId: string, eventId: string) =>
     request<Record<string, unknown>>(`${room(roomId)}/event?id=${encodeURIComponent(eventId)}`),
   stream: (roomId: string) => new EventSource(`${room(roomId)}/stream`),

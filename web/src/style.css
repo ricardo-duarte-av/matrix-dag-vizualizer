@@ -77,6 +77,7 @@ button.icon { border: none; background: none; font-size: 18px; line-height: 1; p
 #room { max-width: 340px; }
 #search { width: 220px; }
 body:not(.admin) .admin-only { display: none; }
+body:not(.can-fetch) .fetch-only { display: none; }
 
 main { position: relative; overflow: hidden; min-height: 0; }
 #cy { position: absolute; inset: 0; }
@@ -121,6 +122,8 @@ main { position: relative; overflow: hidden; min-height: 0; }
 .swatch.square { border-radius: 2px; }
 .swatch.ring { background: none; border: 2px solid var(--accent); }
 .swatch.dashed { background: none; border: 2px dashed var(--muted); }
+.swatch.faint { opacity: 0.35; }
+.swatch.remote { background: var(--muted); outline: 2px dotted var(--accent); outline-offset: 1px; }
 .swatch.line { width: 16px; height: 0; border-radius: 0; border-top: 2px solid var(--edge); }
 .swatch.line.child { border-top-color: var(--edge-child); }
 .swatch.line.auth { height: 5px; border-top: 2px dashed var(--edge-auth); border-radius: 50% 50% 0 0 / 100% 100% 0 0; }
@@ -151,7 +154,9 @@ main { position: relative; overflow: hidden; min-height: 0; }
 #panel ul.child a { color: var(--edge-child); }
 #panel ul.auth a { color: var(--edge-auth); }
 #panel ul a.unknown { color: var(--muted); }
-#panel #resolve-one { margin-top: 4px; }
+#panel .fetch { margin: 4px 0 6px; }
+#panel .fetch-from { display: flex; gap: 6px; margin: 4px 0 6px; }
+#panel .fetch-from input { flex: 1; min-width: 0; }
 #panel pre {
   font-size: 11px;
   background: var(--bg);

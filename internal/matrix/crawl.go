@@ -3,7 +3,9 @@ package matrix
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -46,9 +48,14 @@ func (c *Client) crawl(roomID string) *crawlState {
 	return st.(*crawlState)
 }
 
+// canCrawl reports whether the crawler has any way to fetch events.
+func (c *Client) canCrawl() bool {
+	return c.IsAdmin() || (c.fed != nil && c.cfg.Federation.Crawl)
+}
+
 // kickCrawl schedules a background gap fill of a room.
 func (c *Client) kickCrawl(roomID string) {
-	if !c.cfg.FillGaps || !c.IsAdmin() {
+	if !c.cfg.FillGaps || !c.canCrawl() {
 		return
 	}
 	select {
@@ -65,7 +72,7 @@ func (c *Client) crawlLoop(roomID string, st *crawlState) {
 			return
 		case <-st.wake:
 		}
-		if !c.IsAdmin() {
+		if !c.canCrawl() {
 			continue
 		}
 		resolved, remaining, err := c.FillGaps(ctx, roomID, c.cfg.ResolveBudget)
@@ -91,8 +98,8 @@ func (c *Client) crawlLoop(roomID string, st *crawlState) {
 // newest first. It returns how many events were added and how many gaps are
 // left that may still be fetchable.
 func (c *Client) FillGaps(ctx context.Context, roomID string, budget int) (resolved, remaining int, err error) {
-	if !c.IsAdmin() {
-		return 0, 0, fmt.Errorf("resolving missing events requires Synapse admin")
+	if !c.canCrawl() {
+		return 0, 0, errCantFetch
 	}
 	st := c.crawl(roomID)
 	for budget > 0 && ctx.Err() == nil {
@@ -101,27 +108,34 @@ func (c *Client) FillGaps(ctx context.Context, roomID string, budget int) (resol
 			break
 		}
 		budget -= len(batch)
-		added, err := c.fetchInto(ctx, roomID, st, batch)
+		added, err := c.fetchInto(ctx, roomID, st, batch, c.cfg.Federation.Crawl)
 		resolved += len(added)
 		if err != nil {
 			c.store.Notify(roomID, fmt.Sprintf("Gap crawl stopped: %v", err))
 			return resolved, len(c.pendingGaps(roomID, st, 0)), err
 		}
-		dummies := 0
+		dummies, remote := 0, 0
 		for _, n := range added {
 			if n.Type == "org.matrix.dummy_event" {
 				dummies++
 			}
+			if n.Source != "" {
+				remote++
+			}
 		}
-		c.store.Notify(roomID, fmt.Sprintf("Gap crawl: fetched %d, added %d (%d dummy events), %d not on server; %d gaps left",
-			len(batch), len(added), dummies, len(batch)-len(added), len(c.pendingGaps(roomID, st, 0))))
+		msg := fmt.Sprintf("Gap crawl: requested %d, added %d (%d dummy events", len(batch), len(added), dummies)
+		if remote > 0 {
+			msg += fmt.Sprintf(", %d over federation", remote)
+		}
+		c.store.Notify(roomID, msg+fmt.Sprintf("), %d unavailable; %d gaps left",
+			len(batch)-len(added), len(c.pendingGaps(roomID, st, 0))))
 	}
 	remaining = len(c.pendingGaps(roomID, st, 0))
 	if remaining == 0 && resolved > 0 {
 		info, _ := c.store.Room(roomID)
 		msg := fmt.Sprintf("Gap crawl done: every hole above depth %d is filled", info.Floor)
 		if unavailable := len(c.store.Gaps(roomID)); unavailable > 0 {
-			msg = fmt.Sprintf("Gap crawl done: %d events above depth %d are not on the server and stay missing", unavailable, info.Floor)
+			msg = fmt.Sprintf("Gap crawl done: %d events above depth %d couldn't be fetched and stay missing", unavailable, info.Floor)
 		}
 		c.store.Notify(roomID, msg)
 	}
@@ -145,48 +159,143 @@ func (c *Client) pendingGaps(roomID string, st *crawlState, limit int) []string 
 	return out
 }
 
-// fetchInto fetches ids into the room. Every id ends up either in the store
-// or in st.failed, so repeated calls always make progress.
-func (c *Client) fetchInto(ctx context.Context, roomID string, st *crawlState, ids []string) ([]*dag.Node, error) {
-	results := c.fetchEvents(ctx, ids)
-	var events []json.RawMessage
-	var eventIDs []string
-	var fatal error
-	for i, res := range results {
-		if res.err == nil && !inRoom(res.raw, roomID) {
-			res.err = fmt.Errorf("event belongs to another room")
+// errCantFetch means neither Synapse admin nor federation fetching is available.
+var errCantFetch = errors.New("fetching missing events requires Synapse admin or federation.signing_key_path")
+
+// ResolveEvents fetches specific missing events of a room: from the
+// homeserver (Synapse admin) with a federation fallback, or, when server is
+// set, from that server only. It returns the events that are still missing.
+func (c *Client) ResolveEvents(ctx context.Context, roomID string, ids []string, server string) (added []*dag.Node, missing []string, err error) {
+	if server != "" && c.fed == nil {
+		return nil, ids, errors.New("federation fetching is not configured")
+	}
+	if !c.IsAdmin() && c.fed == nil {
+		return nil, ids, errCantFetch
+	}
+	refs := c.store.MissingRefs(roomID)
+	for _, id := range ids {
+		if !slices.Contains(refs, id) {
+			return nil, ids, fmt.Errorf("%s is not a missing event of %s", id, roomID)
 		}
-		if res.err != nil {
-			if isForbidden(res.err) {
-				c.admin.Store(false)
-				fatal = res.err
+	}
+	st := c.crawl(roomID)
+	// A manual request retries events earlier attempts gave up on.
+	st.mu.Lock()
+	for _, id := range ids {
+		delete(st.failed, id)
+	}
+	st.mu.Unlock()
+
+	if server != "" {
+		c.store.Notify(roomID, fmt.Sprintf("Fetching %d event(s) from %s over federation", len(ids), server))
+		added = c.fetchRemote(ctx, roomID, ids, []string{server})
+		c.markFailed(roomID, st, ids)
+	} else {
+		c.store.Notify(roomID, fmt.Sprintf("Resolving %d event(s)", len(ids)))
+		added, err = c.fetchInto(ctx, roomID, st, ids, true)
+	}
+	for _, id := range ids {
+		if _, ok := c.store.Raw(roomID, id); !ok {
+			missing = append(missing, id)
+		}
+	}
+	msg := fmt.Sprintf("Resolved %d of %d event(s)", len(ids)-len(missing), len(ids))
+	if len(missing) > 0 {
+		msg += fmt.Sprintf("; %d not available", len(missing))
+	}
+	c.store.Notify(roomID, msg)
+	return added, missing, err
+}
+
+// fetchInto fetches ids into the room: through Synapse admin when available,
+// then (if remote) over federation for whatever the homeserver doesn't have.
+// Every id ends up either in the store or in st.failed, so repeated calls
+// always make progress.
+func (c *Client) fetchInto(ctx context.Context, roomID string, st *crawlState, ids []string, remote bool) ([]*dag.Node, error) {
+	var added []*dag.Node
+	notLocal := ids
+	if c.IsAdmin() {
+		notLocal = nil
+		results := c.fetchEvents(ctx, ids)
+		var events []json.RawMessage
+		var eventIDs []string
+		var fatal error
+		for i, res := range results {
+			if res.err == nil && !inRoom(res.raw, roomID) {
+				c.log.Debug().Str("event_id", ids[i]).Msg("fetch_event returned an event of another room")
 				continue
 			}
-			c.log.Debug().Err(res.err).Str("event_id", ids[i]).Msg("fetch_event failed")
-			continue
+			if res.err != nil {
+				if isForbidden(res.err) {
+					c.admin.Store(false)
+					fatal = res.err
+					continue
+				}
+				c.log.Debug().Err(res.err).Str("event_id", ids[i]).Msg("fetch_event failed")
+				notLocal = append(notLocal, ids[i])
+				continue
+			}
+			events = append(events, res.raw)
+			eventIDs = append(eventIDs, ids[i])
 		}
-		events = append(events, res.raw)
-		eventIDs = append(eventIDs, ids[i])
+		lock := c.roomLock(roomID)
+		lock.Lock()
+		added, _ = c.store.Add(roomID, events, eventIDs...)
+		lock.Unlock()
+		if fatal != nil {
+			return added, fatal
+		}
 	}
-	lock := c.roomLock(roomID)
-	lock.Lock()
-	added, _ := c.store.Add(roomID, events, eventIDs...)
-	lock.Unlock()
-	if fatal != nil {
-		return added, fatal
+	if remote && c.fed != nil && len(notLocal) > 0 && ctx.Err() == nil {
+		added = append(added, c.fetchRemote(ctx, roomID, notLocal, c.fedServers)...)
 	}
 	if ctx.Err() != nil {
 		// Cancelled fetches say nothing about whether the event exists.
 		return added, ctx.Err()
 	}
+	c.markFailed(roomID, st, ids)
+	return added, nil
+}
+
+// fetchRemote fetches ids over federation, asking servers in order.
+func (c *Client) fetchRemote(ctx context.Context, roomID string, ids []string, servers []string) []*dag.Node {
+	var (
+		mu    sync.Mutex
+		added []*dag.Node
+		wg    sync.WaitGroup
+		sem   = make(chan struct{}, fetchConcurrency)
+	)
+	for _, eventID := range ids {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			raw, server, err := c.FetchRemote(ctx, roomID, eventID, servers)
+			if err != nil {
+				c.log.Debug().Err(err).Str("event_id", eventID).Msg("Federation fetch failed")
+				return
+			}
+			lock := c.roomLock(roomID)
+			lock.Lock()
+			nodes, _ := c.store.AddRemote(roomID, server, []json.RawMessage{raw}, []string{eventID})
+			lock.Unlock()
+			mu.Lock()
+			added = append(added, nodes...)
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	return added
+}
+
+// markFailed records which ids are still not in the store.
+func (c *Client) markFailed(roomID string, st *crawlState, ids []string) {
 	st.mu.Lock()
+	defer st.mu.Unlock()
 	for _, id := range ids {
 		if _, ok := c.store.Raw(roomID, id); !ok {
 			st.failed[id] = struct{}{}
 		}
 	}
-	st.mu.Unlock()
-	return added, nil
 }
 
 func inRoom(raw json.RawMessage, roomID string) bool {

@@ -1,0 +1,36 @@
+{
+ "auth_events": [
+  "$7PJH4Jh9BJfO_CCaPOg2kNlkkoP2EEk6oE-v0yZWhVM",
+  "$sbusQdJu8vp4mYghGgIdFrz9K_UbSNVmVr3UBxLM2Mk"
+ ],
+ "content": {},
+ "depth": 90624,
+ "event_id": "$liQuMwKvUU_2jVaTpTmDA-rK09YO7O_moFggAtdf428",
+ "hashes": {
+  "sha256": "6i+DPz8VDePfOO9OUANaO+jxR1pSkabNThbTaPn4xww"
+ },
+ "origin_server_ts": 1792094706116,
+ "prev_events": [
+  "$SyWqImok_JUE-7szQX1nWntdPzgIoi4YBc4fdii2rpQ",
+  "$59m-oh-zejrkfkyz3eobL9oeNVbc99m4NdG7nELYkJM",
+  "$uf9KPC_ZuXmnsbyR8iP3yQB4vAMSZfuKt7NzQE7Q14U",
+  "$7CYAOwdCses9JBIzypGxbIU5DV73tlz6o_893X6HwFY",
+  "$r_t_jID1EAXIdUF_MksS7AaB51Nq281RF1HHjkrwuqo",
+  "$28WqV5M1AYtky6dQlpw5sC40-UhcNdHUcGsL64y8obk",
+  "$b7Je8s3HMEg40GZ_ys83kCfutKysEzlIWS0uAXcI3gQ",
+  "$3-tkKlR3GjngG2Rmv-F84_r34D5nEM3XCwU3a8Ji62o",
+  "$DSEhgFny1MDr5l8VgDvRLoCu2chzCaIzg0laxPA3EB8",
+  "$2odu05vlkw--I1kk2X_9xGs64p-SfP_gbU5Klkrznhg"
+ ],
+ "room_id": "!L58ME6ufiP49v97UIOBIpvWKEgj4912JmECPuDzlvCI",
+ "sender": "@tonkku:tonkku.me",
+ "signatures": {
+  "beta2.matrix.org": {
+   "ed25519:policy_server": "Hzwbr+/f50ZC5+cv/xQv7TmuZ6TS2UQZXtRg7re8PQySNv3GZcvzpCiLThb9zSMotX3evrnH13lal7HGoc+ODw"
+  },
+  "tonkku.me": {
+   "ed25519:a_jIXA": "x8sok+9uVGIBgNk6/QfLQJmmCrbJOSMg7rrLjok8P9oT4NrrTa4oV7NJBHAzzUYqspsYG43GnFUWM7DXh9d5DQ"
+  }
+ },
+ "type": "org.matrix.dummy_event"
+}

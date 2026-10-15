@@ -37,10 +37,28 @@ type MatrixConfig struct {
 	MaxEventsPerRoom int           `yaml:"max_events_per_room"`
 	ResolveBudget    int           `yaml:"resolve_budget"`
 	FillGaps         bool          `yaml:"fill_gaps"`
+	Federation       Federation    `yaml:"federation"`
 	SyncTimeout      time.Duration `yaml:"sync_timeout"`
 	AdminCheckEvery  time.Duration `yaml:"admin_check_interval"`
 	DataDir          string        `yaml:"data_dir"`
 }
+
+// Federation lets dagviz fetch events the homeserver doesn't have straight
+// from other servers in the room, signing requests as the homeserver.
+type Federation struct {
+	// SigningKeyPath is the homeserver's signing key (Synapse's .signing.key).
+	// Empty disables federation fetching.
+	SigningKeyPath string `yaml:"signing_key_path"`
+	// ServerName the key belongs to; defaults to the user_id's server.
+	ServerName string `yaml:"server_name"`
+	// Servers are asked in order for events the homeserver doesn't have.
+	Servers []string `yaml:"servers"`
+	// Crawl lets the gap crawler fall back to Servers, not just the
+	// per-event buttons.
+	Crawl bool `yaml:"crawl"`
+}
+
+func (f Federation) Enabled() bool { return f.SigningKeyPath != "" }
 
 type WebConfig struct {
 	Listen    string    `yaml:"listen"`
@@ -79,6 +97,7 @@ func Default() Config {
 			MaxEventsPerRoom: 20000,
 			ResolveBudget:    200,
 			FillGaps:         true,
+			Federation:       Federation{Servers: []string{"matrix.org"}, Crawl: true},
 			SyncTimeout:      30 * time.Second,
 			AdminCheckEvery:  5 * time.Minute,
 			DataDir:          "/data",
@@ -150,6 +169,9 @@ func (c *Config) normalize() error {
 	}
 	if c.Matrix.InitialBackfill < 0 || c.Matrix.ResolveBudget < 0 {
 		errs = append(errs, errors.New("matrix.initial_backfill and matrix.resolve_budget must not be negative"))
+	}
+	if c.Matrix.Federation.Enabled() && len(c.Matrix.Federation.Servers) == 0 {
+		errs = append(errs, errors.New("matrix.federation.servers must list at least one server"))
 	}
 	if c.Matrix.SyncTimeout < time.Second {
 		c.Matrix.SyncTimeout = time.Second

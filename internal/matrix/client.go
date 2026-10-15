@@ -16,6 +16,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/federation"
 	"maunium.net/go/mautrix/id"
 
 	"github.com/ricardo-duarte-av/matrix-dag-vizualizer/internal/config"
@@ -43,6 +44,10 @@ type Client struct {
 	crawls sync.Map
 	// ctx outlives requests; background crawls run under it.
 	ctx context.Context
+
+	// fed fetches events over federation; nil when not configured.
+	fed        *federation.Client
+	fedServers []string
 }
 
 type session struct {
@@ -115,7 +120,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		}
 	}
 	c.CheckAdmin(ctx)
-	return nil
+	return c.setupFederation()
 }
 
 func (c *Client) resolveHomeserver(ctx context.Context) (string, error) {

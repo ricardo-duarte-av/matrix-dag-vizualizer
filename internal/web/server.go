@@ -149,6 +149,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		"homeserver":       s.mx.Homeserver(),
 		"admin":            s.mx.IsAdmin(),
 		"room_allowlist":   len(s.mx.Config().Rooms) > 0,
+		// Servers events can be fetched from over federation (empty: disabled).
+		"federation_servers": s.mx.FederationServers(),
 	})
 }
 
@@ -263,17 +265,20 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.mx.IsAdmin() {
-		writeError(w, http.StatusForbidden, errors.New("resolving missing events requires Synapse admin"))
+	if !s.mx.IsAdmin() && s.mx.FederationServers() == nil {
+		writeError(w, http.StatusForbidden, errors.New("resolving missing events requires Synapse admin or federation fetching"))
 		return
 	}
-	if eventID := r.URL.Query().Get("id"); eventID != "" {
-		remaining, err := s.mx.ResolveEvent(r.Context(), roomID, eventID)
-		if err != nil {
+	// Specific events (?id=…&id=…), optionally from one server (&server=…).
+	if ids := r.URL.Query()["id"]; len(ids) > 0 {
+		added, missing, err := s.mx.ResolveEvents(r.Context(), roomID, ids, r.URL.Query().Get("server"))
+		if err != nil && len(added) == 0 {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"resolved": 1, "remaining": remaining})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"resolved": len(added), "missing": missing, "remaining": len(s.store.MissingRefs(roomID)),
+		})
 		return
 	}
 	budget := s.mx.Config().ResolveBudget

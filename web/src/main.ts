@@ -357,13 +357,14 @@ async function showEvent(id: string, missing: boolean) {
         <dt>Depth</dt><dd>${n.depth}</dd>
         <dt>Time</dt><dd>${new Date(n.ts).toLocaleString()}</dd>
         ${n.summary ? `<dt>Summary</dt><dd>${escapeHTML(n.summary)}</dd>` : ""}
+        ${n.source ? `<dt>Source</dt><dd>fetched from ${escapeHTML(n.source)} over federation; your server doesn't have it</dd>` : ""}
       </dl>
-      <h3>prev_events (${n.prev.length})</h3><ul class="prev">${refList(n.prev, (p) => edgeId("prev", p, id))}</ul>
+      <h3>prev_events (${n.prev.length})</h3>${fetchParentsButton(n)}<ul class="prev">${refList(n.prev, (p) => edgeId("prev", p, id))}</ul>
       <h3>Children (${children.length})</h3><ul class="child">${refList(children, (c) => edgeId("prev", id, c))}</ul>
       <h3>auth_events (${n.auth.length})</h3><ul class="auth">${refList(n.auth, (a) => edgeId("auth", a, id))}</ul>`
     : `<h2>Missing event</h2><dl><dt>Event</dt><dd>${escapeHTML(id)}</dd>${link}</dl>
-      <p class="unknown">Referenced by loaded events but not available ${missing && cfg.admin ? "in the graph yet. Use “Resolve missing” to pull it in." : "to this account (before join, history visibility or a gap). Synapse admin access can fill these in."}</p>
-      ${missing && cfg.admin ? `<button id="resolve-one">Resolve this event</button>` : ""}
+      <p class="unknown">${missingExplanation(id)}</p>
+      ${missing ? fetchControls() : ""}
       <h3>Children (${children.length})</h3><ul class="child">${refList(children, (c) => edgeId("prev", id, c))}</ul>`;
   els.panelBody.innerHTML = `${header}<h3>Raw PDU</h3><pre id="raw">Loading…</pre>`;
   try {
@@ -387,15 +388,57 @@ function focus(id: string): boolean {
   return true;
 }
 
-async function resolveOne() {
-  const id = selectedEvent;
-  if (!currentRoom || !id) return;
-  busy("Resolving event via Synapse admin API…");
-  log(`Resolving ${id}`);
+const fedServers = () => cfg.federation_servers ?? [];
+/** Whether missing events can be fetched at all (Synapse admin or federation). */
+const canFetch = () => cfg.admin || fedServers().length > 0;
+
+function missingExplanation(id: string): string {
+  if (view.isBeyond(id)) {
+    return `Older history: only events newer than depth ${view.loadedFloor} are loaded, and the gap crawler stops there. Use “Load older” to extend the window, or fetch this event directly.`;
+  }
+  if (!canFetch()) {
+    return "Referenced by loaded events but not available to this account (before join, history visibility or a gap). Synapse admin access or federation fetching can fill these in.";
+  }
+  return "Referenced by loaded events but not in the graph yet. The gap crawler fetches these automatically; if it is still missing, your server likely never received it.";
+}
+
+/** Buttons for a missing event: resolve it normally, or ask a chosen server. */
+function fetchControls(): string {
+  if (!canFetch()) return "";
+  const servers = fedServers();
+  const remote = servers.length
+    ? `<div class="fetch-from">
+        <input id="fetch-server" list="fetch-servers" value="${escapeHTML(servers[0])}" spellcheck="false" aria-label="Server" />
+        <datalist id="fetch-servers">${servers.map((s) => `<option value="${escapeHTML(s)}"></option>`).join("")}</datalist>
+        <button id="fetch-from" title="Ask this server for the event over federation">Fetch from server</button>
+      </div>`
+    : "";
+  return `<div class="fetch"><button id="resolve-one" title="${cfg.admin ? "Your server first, then " : ""}${servers.length ? servers.join(", ") : ""}">Resolve this event</button></div>${remote}`;
+}
+
+function fetchParentsButton(n: DagNode): string {
+  const missing = n.prev.filter((p) => !nodesById.has(p));
+  if (!missing.length || !canFetch()) return "";
+  return `<div class="fetch"><button id="fetch-parents">Fetch ${missing.length} missing parent${missing.length === 1 ? "" : "s"}</button></div>`;
+}
+
+/** Fetches specific missing events and refreshes the panel. */
+async function resolveIds(ids: string[], server?: string) {
+  const shown = selectedEvent;
+  if (!currentRoom || !ids.length || !shown) return;
+  const what = ids.length === 1 ? ids[0] : `${ids.length} events`;
+  busy(server ? `Fetching ${what} from ${server}…` : `Resolving ${what}…`);
+  log(server ? `Fetching ${what} from ${server} over federation` : `Resolving ${what}`);
   try {
-    const res = await api.resolveEvent(currentRoom, id);
-    await reloadGraph(`Resolved event (${res.remaining} still missing), re-rendering…`);
-    if (!focus(id)) renderStatus("Resolved event is not in the rendered graph");
+    const res = await api.resolveEvents(currentRoom, ids, server);
+    const missing = res.missing ?? [];
+    log(
+      `Fetched ${ids.length - missing.length} of ${ids.length}` + (missing.length ? `; ${missing.length} not available` : ""),
+      { error: missing.length === ids.length },
+    );
+    // New events arrive over the live stream; without it, reload.
+    if (!stream) await reloadGraph("Re-rendering…");
+    if (!focus(shown)) void showEvent(shown, !nodesById.has(shown));
   } catch (e) {
     renderStatus((e as Error).message);
   } finally {
@@ -426,6 +469,8 @@ function renderLegend() {
     <div class="row"><span class="swatch square" style="background:var(--muted)"></span>state event</div>
     <div class="row"><span class="swatch ring"></span>forward extremity</div>
     <div class="row"><span class="swatch dashed"></span>missing event</div>
+    <div class="row"><span class="swatch dashed faint"></span>older history (not loaded)</div>
+    ${fedServers().length ? `<div class="row"><span class="swatch remote"></span>fetched over federation</div>` : ""}
     <div class="row"><span class="swatch line"></span>prev_events</div>
     <div class="row"><span class="swatch line child"></span>children of selected</div>
     <div class="row"><span class="swatch line auth"></span>auth_events</div>`;
@@ -458,6 +503,7 @@ function renderStatus(error?: string) {
 function setAdmin(admin: boolean) {
   cfg.admin = admin;
   document.body.classList.toggle("admin", admin);
+  document.body.classList.toggle("can-fetch", canFetch());
 }
 
 // ---- Wiring ---------------------------------------------------------------------
@@ -535,8 +581,15 @@ async function main() {
     writeHash(currentRoom);
   };
   els.panelBody.addEventListener("click", (e) => {
-    if ((e.target as HTMLElement).closest("#resolve-one")) {
-      void resolveOne();
+    const button = (e.target as HTMLElement).closest("button");
+    if (button && selectedEvent) {
+      const n = nodesById.get(selectedEvent);
+      if (button.id === "resolve-one") void resolveIds([selectedEvent]);
+      else if (button.id === "fetch-parents" && n) void resolveIds(n.prev.filter((p) => !nodesById.has(p)));
+      else if (button.id === "fetch-from") {
+        const server = ($("fetch-server") as HTMLInputElement).value.trim();
+        if (server) void resolveIds([selectedEvent], server);
+      }
       return;
     }
     const a = (e.target as HTMLElement).closest<HTMLElement>("a[data-event]");

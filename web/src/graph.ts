@@ -100,6 +100,8 @@ export class DagView {
   /** parent event ID → events referencing it, so late parents can be linked. */
   private children = new Map<string, [string, EdgeKind][]>();
   onSelect: (id: string | null, missing: boolean) => void = () => {};
+  /** Depth of the oldest loaded timeline event; the crawler stops there. */
+  private floor = 0;
 
   constructor(container: HTMLElement, opts: ViewOptions) {
     this.opts = { ...opts };
@@ -131,7 +133,7 @@ export class DagView {
     if (patch.colorBy && patch.colorBy !== prev.colorBy) this.recolor();
     if (patch.showAuth !== undefined && patch.showAuth !== prev.showAuth) {
       this.cy.edges(".auth").toggleClass("hidden", !this.opts.showAuth);
-      this.markAuthOnly();
+      this.classifyMissing();
       this.layout(false);
     }
     if (patch.showIds !== undefined && patch.showIds !== prev.showIds) {
@@ -154,6 +156,7 @@ export class DagView {
 
   /** Replace the whole graph. */
   load(data: DagResponse) {
+    this.floor = data.room.floor ?? 0;
     this.cy.elements().remove();
     this.children.clear();
     this.cy.batch(() => {
@@ -161,7 +164,7 @@ export class DagView {
       for (const id of data.missing) this.ensureMissing(id);
       this.addEdges(data.nodes);
       this.markExtremities(data.extremities, data.server_extremities);
-      this.markAuthOnly();
+      this.classifyMissing();
     });
     this.layout(true);
   }
@@ -182,7 +185,7 @@ export class DagView {
         for (const ref of [...n.prev, ...n.auth]) this.ensureMissing(ref);
       }
       this.addEdges(fresh);
-      this.markAuthOnly();
+      this.classifyMissing();
       // Recompute "computed" extremities: nodes without children.
       this.cy.nodes(".extremity").removeClass("extremity");
       this.cy
@@ -218,6 +221,7 @@ export class DagView {
         classes: [
           isState(n) ? "state" : "message",
           n.type === "m.room.create" ? "create" : "",
+          n.source ? "remote" : "",
         ].join(" "),
       })),
     );
@@ -264,11 +268,27 @@ export class DagView {
   /**
    * Missing events referenced only through auth_events would float
    * unconnected while auth edges are hidden, so hide them along with those.
+   * Missing parents of events at or below the floor are older history rather
+   * than holes: the crawler doesn't go there, so they are drawn fainter.
    */
-  private markAuthOnly() {
+  private classifyMissing() {
     this.cy.nodes(".missing").forEach((m) => {
-      m.toggleClass("hidden", !this.opts.showAuth && m.outgoers("edge.prev").empty());
+      const children = m.outgoers("edge.prev").targets();
+      m.toggleClass("hidden", !this.opts.showAuth && children.empty());
+      m.toggleClass(
+        "beyond",
+        this.floor > 0 && children.nonempty() && children.every((c) => (c.data("depth") ?? Infinity) <= this.floor),
+      );
     });
+  }
+
+  /** Whether a missing event lies past the loaded window (see classifyMissing). */
+  isBeyond(id: string): boolean {
+    return this.cy.getElementById(id).hasClass("beyond");
+  }
+
+  get loadedFloor(): number {
+    return this.floor;
   }
 
   private markExtremities(computed: string[], server?: string[]) {
@@ -667,7 +687,13 @@ export class DagView {
         selector: "node.server-extremity",
         style: { "border-width": 4, "border-color": accent, "border-style": "double", width: 24, height: 24 },
       },
+      // Fetched over federation: the homeserver doesn't have these events.
+      {
+        selector: "node.remote",
+        style: { "outline-width": 2, "outline-color": accent, "outline-style": "dotted", "outline-offset": 3 },
+      },
       ...idRules,
+      { selector: "node.missing.beyond", style: { opacity: 0.35 } },
       {
         selector: "edge",
         style: {

@@ -54,6 +54,25 @@ matrix:
   # them, down to the oldest loaded timeline event.
   fill_gaps: true
 
+  # Fetch events your homeserver never received (fetch_event returns 404)
+  # straight from other servers in the room, over federation. dagviz signs
+  # these requests as your homeserver, so it needs the homeserver's signing
+  # key. Anything holding that key can act as your server on federation:
+  # mount it read-only and keep the UI behind authentication. Fetched events
+  # are only shown in dagviz; your homeserver does not learn about them.
+  federation:
+    # Synapse's signing key file (e.g. /data/example.org.signing.key). Empty
+    # disables federation fetching.
+    signing_key_path: ""
+    # Server the key belongs to; defaults to the server part of user_id.
+    server_name: ""
+    # Asked in order.
+    servers:
+      - matrix.org
+    # Let the background gap crawler use these servers too, not just the
+    # per-event buttons in the side panel.
+    crawl: true
+
   # Long-poll timeout for /sync.
   sync_timeout: 30s
   # How often Synapse admin status is re-checked (granting/revoking admin is

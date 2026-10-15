@@ -34,6 +34,9 @@ type Node struct {
 	Prev     []string `json:"prev"`
 	Auth     []string `json:"auth"`
 	Summary  string   `json:"summary,omitempty"`
+	// Source names the remote server an event was fetched from over
+	// federation; empty when the homeserver itself has it.
+	Source string `json:"source,omitempty"`
 }
 
 // ParsePDU decodes a raw federation-format event. fallbackID is used when the

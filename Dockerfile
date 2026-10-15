@@ -16,7 +16,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/web/dist ./web/dist
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+# jsonv2 enables checking that events fetched over federation match their ID.
+RUN CGO_ENABLED=0 GOEXPERIMENT=jsonv2 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/dagviz ./cmd/dagviz \
  && mkdir -p /out/data
 

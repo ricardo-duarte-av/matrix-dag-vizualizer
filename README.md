@@ -40,6 +40,40 @@ event. Older history stays untouched until **Load older** extends the window,
 so the crawl always finishes. Events the server never received over federation
 stay missing. Set `fill_gaps: false` to turn the background crawl off.
 
+Missing parents of events past that boundary are drawn faint ("older
+history"); select an event to fetch its missing parents directly.
+
+### Federation fetching (optional)
+
+Some events your homeserver never received at all (`fetch_event` returns 404).
+With `matrix.federation.signing_key_path` set, dagviz asks other servers in the
+room for them (`GET /_matrix/federation/v1/event/{eventId}`, by default from
+matrix.org), signing the requests as your homeserver. Servers only answer
+servers that are in the room, which is why it needs your homeserver's key:
+
+```yaml
+# docker-compose.yaml
+    volumes:
+      - /path/to/synapse/example.org.signing.key:/keys/signing.key:ro
+```
+
+```yaml
+# config.yaml
+matrix:
+  federation:
+    signing_key_path: /keys/signing.key
+    servers: [matrix.org]
+```
+
+> Anything holding that key can act as your server on federation. Mount it
+> read-only and keep the UI behind authentication.
+
+Fetched events are only shown in dagviz (dotted outline); your homeserver
+doesn't learn about them. dagviz checks that each one belongs to the room and
+hashes to the requested event ID, so a server can't pass off a different event.
+The ID check needs `GOEXPERIMENT=jsonv2` at build time, which the Docker image
+sets. The side panel can also fetch a single event from any server you type in.
+
 Without admin rights everything else works; events the account can't see
 (before it joined, hidden by history visibility, timeline gaps) appear as
 dashed "missing" placeholders.
@@ -77,7 +111,7 @@ Requirements: Go 1.26+, Node.js LTS.
 
 ```sh
 cd web && npm ci && npm run build && cd ..   # builds web/dist, embedded into the binary
-go run ./cmd/dagviz -config config.yaml
+GOEXPERIMENT=jsonv2 go run ./cmd/dagviz -config config.yaml
 
 # Frontend hot reload against a running backend on :8080
 cd web && npm run dev
