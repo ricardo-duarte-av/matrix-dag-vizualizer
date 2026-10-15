@@ -36,6 +36,7 @@ type MatrixConfig struct {
 	BackfillPageSize int           `yaml:"backfill_page_size"`
 	MaxEventsPerRoom int           `yaml:"max_events_per_room"`
 	ResolveBudget    int           `yaml:"resolve_budget"`
+	FillGaps         bool          `yaml:"fill_gaps"`
 	SyncTimeout      time.Duration `yaml:"sync_timeout"`
 	AdminCheckEvery  time.Duration `yaml:"admin_check_interval"`
 	DataDir          string        `yaml:"data_dir"`
@@ -77,6 +78,7 @@ func Default() Config {
 			BackfillPageSize: 100,
 			MaxEventsPerRoom: 20000,
 			ResolveBudget:    200,
+			FillGaps:         true,
 			SyncTimeout:      30 * time.Second,
 			AdminCheckEvery:  5 * time.Minute,
 			DataDir:          "/data",

@@ -126,9 +126,15 @@ func (c *Client) handleSync(ctx context.Context, resp *syncResponse, initial boo
 				r.Name = name
 			}
 		})
-		events := slices.Concat(jr.State.Events, jr.Timeline.Events)
-		if _, errs := c.store.Add(roomID, events); len(errs) > 0 {
+		_, errs := c.store.Add(roomID, jr.State.Events)
+		added, timelineErrs := c.store.AddTimeline(roomID, jr.Timeline.Events)
+		if errs = append(errs, timelineErrs...); len(errs) > 0 {
 			c.log.Debug().Errs("errors", errs).Str("room_id", roomID).Msg("Skipped unparseable events")
+		}
+		if len(added) > 0 {
+			if info, _ := c.store.Room(roomID); info.Hydrated {
+				c.kickCrawl(roomID)
+			}
 		}
 		if jr.Timeline.Limited && !initial {
 			c.log.Debug().Str("room_id", roomID).Msg("Timeline gap; missing events will show as placeholders")

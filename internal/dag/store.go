@@ -1,8 +1,10 @@
 package dag
 
 import (
+	"cmp"
 	"encoding/json"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -20,6 +22,11 @@ type Room struct {
 	PrevBatch    string
 	BackfillDone bool
 	Hydrated     bool // initial backfill has been performed
+
+	// Floor is the depth of the oldest timeline event loaded (0 = none yet).
+	// Events below it were only seen as state, or were evicted, so gaps there
+	// are outside the loaded window and not worth crawling.
+	Floor int64
 }
 
 // Update is pushed to subscribers whenever new events are added to a room.
@@ -83,13 +90,14 @@ type RoomInfo struct {
 	PrevBatch    string `json:"-"`
 	BackfillDone bool   `json:"backfill_done"`
 	Hydrated     bool   `json:"-"`
+	Floor        int64  `json:"floor"`
 }
 
 func (r *Room) info() RoomInfo {
 	return RoomInfo{
 		ID: r.ID, Name: r.Name, Version: r.Version, Joined: r.Joined,
 		EventCount: len(r.nodes), PrevBatch: r.PrevBatch,
-		BackfillDone: r.BackfillDone, Hydrated: r.Hydrated,
+		BackfillDone: r.BackfillDone, Hydrated: r.Hydrated, Floor: r.Floor,
 	}
 }
 
@@ -116,6 +124,16 @@ func (s *Store) Rooms() []RoomInfo {
 // Add inserts events into a room and notifies subscribers of the ones that
 // were new. It returns the newly added nodes.
 func (s *Store) Add(roomID string, events []json.RawMessage, fallbackIDs ...string) ([]*Node, []error) {
+	return s.add(roomID, events, false, fallbackIDs)
+}
+
+// AddTimeline is Add for a contiguous timeline batch (/messages chunk or
+// /sync timeline): it also lowers the room's Floor to the batch's oldest event.
+func (s *Store) AddTimeline(roomID string, events []json.RawMessage) ([]*Node, []error) {
+	return s.add(roomID, events, true, nil)
+}
+
+func (s *Store) add(roomID string, events []json.RawMessage, timeline bool, fallbackIDs []string) ([]*Node, []error) {
 	var errs []error
 	s.mu.Lock()
 	r := s.ensure(roomID)
@@ -129,6 +147,9 @@ func (s *Store) Add(roomID string, events []json.RawMessage, fallbackIDs ...stri
 		if err != nil {
 			errs = append(errs, err)
 			continue
+		}
+		if timeline && n.Depth > 0 && (r.Floor == 0 || n.Depth < r.Floor) {
+			r.Floor = n.Depth
 		}
 		if _, exists := r.nodes[n.ID]; exists {
 			continue
@@ -179,6 +200,10 @@ func (s *Store) evict(r *Room) {
 	for _, n := range all[:min(excess, len(all))] {
 		delete(r.nodes, n.ID)
 		delete(r.raw, n.ID)
+	}
+	// Don't crawl back into what was just dropped.
+	if excess < len(all) {
+		r.Floor = max(r.Floor, all[excess].Depth)
 	}
 	// Older history was dropped, so further backfill would only re-add it.
 	r.BackfillDone = true
@@ -288,6 +313,39 @@ func (s *Store) MissingRefs(roomID string) []string {
 		return nil
 	}
 	return g.Missing
+}
+
+// Gaps returns the prev_events that are missing from a room and referenced by
+// events above its Floor (the floor event's own parents are simply older
+// history), newest first (by the referencing event's
+// depth). auth_events are not included: they mostly point far back into
+// history and would pull in events unrelated to the loaded window.
+func (s *Store) Gaps(roomID string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.rooms[roomID]
+	if !ok || r.Floor == 0 {
+		return nil
+	}
+	depth := make(map[string]int64)
+	for _, n := range r.nodes {
+		if n.Depth <= r.Floor {
+			continue
+		}
+		for _, p := range n.Prev {
+			if _, have := r.nodes[p]; !have && n.Depth > depth[p] {
+				depth[p] = n.Depth
+			}
+		}
+	}
+	out := make([]string, 0, len(depth))
+	for id := range depth {
+		out = append(out, id)
+	}
+	slices.SortFunc(out, func(a, b string) int {
+		return cmp.Or(cmp.Compare(depth[b], depth[a]), strings.Compare(a, b))
+	})
+	return out
 }
 
 func sortedKeys(m map[string]struct{}) []string {

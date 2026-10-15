@@ -105,3 +105,44 @@ func TestFallbackID(t *testing.T) {
 		t.Fatalf("ParsePDU = %+v, %v", n, err)
 	}
 }
+
+func TestGapsBoundedByFloorNewestFirst(t *testing.T) {
+	s := NewStore(100)
+	// Old state from /messages "state": far below the timeline window.
+	s.Add("!r", []json.RawMessage{pdu("$oldstate", 5, []string{"$ancient"}, nil)})
+	s.AddTimeline("!r", []json.RawMessage{
+		pdu("$t1", 100, []string{"$below"}, nil),
+		pdu("$t2", 101, []string{"$t1"}, nil),
+		pdu("$t3", 105, []string{"$t2", "$dummy"}, []string{"$member"}),
+		pdu("$t4", 103, []string{"$hole"}, nil),
+	})
+	if info, _ := s.Room("!r"); info.Floor != 100 {
+		t.Fatalf("floor = %d, want 100", info.Floor)
+	}
+	got := s.Gaps("!r")
+	// $below is the floor event's parent: older history, not a hole.
+	want := []string{"$dummy", "$hole"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("gaps = %v, want %v (no auth refs, nothing at or below the floor)", got, want)
+	}
+	// Filling a gap with an event below the floor doesn't open new gaps.
+	s.Add("!r", []json.RawMessage{pdu("$hole", 99, []string{"$deeper"}, nil)})
+	if got := s.Gaps("!r"); !slices.Equal(got, []string{"$dummy"}) {
+		t.Fatalf("gaps = %v, want [$dummy]", got)
+	}
+}
+
+func TestEvictionRaisesFloor(t *testing.T) {
+	s := NewStore(3)
+	var evs []json.RawMessage
+	for i := range 5 {
+		evs = append(evs, pdu(fmt.Sprintf("$e%d", i), int64(10+i), []string{fmt.Sprintf("$e%d", i-1)}, nil))
+	}
+	s.AddTimeline("!r", evs)
+	if info, _ := s.Room("!r"); info.Floor != 12 {
+		t.Fatalf("floor = %d, want 12 after evicting the two oldest", info.Floor)
+	}
+	if got := s.Gaps("!r"); len(got) != 0 {
+		t.Fatalf("gaps = %v, would re-fetch evicted events", got)
+	}
+}

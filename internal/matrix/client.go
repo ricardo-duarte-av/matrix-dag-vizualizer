@@ -39,6 +39,10 @@ type Client struct {
 
 	// roomLocks serializes backfill / resolve work per room.
 	roomLocks sync.Map
+	// crawls holds each room's *crawlState for the gap crawler.
+	crawls sync.Map
+	// ctx outlives requests; background crawls run under it.
+	ctx context.Context
 }
 
 type session struct {
@@ -83,6 +87,7 @@ func (c *Client) sessionPath() string { return filepath.Join(c.cfg.DataDir, "ses
 
 // Connect resolves the homeserver and logs in, reusing a stored session when possible.
 func (c *Client) Connect(ctx context.Context) error {
+	c.ctx = ctx
 	hsURL, err := c.resolveHomeserver(ctx)
 	if err != nil {
 		return err

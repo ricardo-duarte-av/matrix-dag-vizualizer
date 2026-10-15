@@ -455,10 +455,10 @@ async function main() {
   };
   els.resolve.onclick = async () => {
     if (!currentRoom) return;
-    busy("Resolving missing events via Synapse admin API…");
+    busy("Filling gaps via Synapse admin API…");
     try {
       const res = await api.resolve(currentRoom);
-      await reloadGraph(`Resolved ${res.resolved} events (${res.remaining} still missing), re-rendering…`);
+      await reloadGraph(`Resolved ${res.resolved} events (${res.remaining} gaps left), re-rendering…`);
     } catch (e) {
       renderStatus((e as Error).message);
     } finally {

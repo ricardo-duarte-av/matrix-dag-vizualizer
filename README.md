@@ -26,9 +26,18 @@ is a Synapse server admin. If so, it additionally:
 
 | Feature | Admin API |
 |---|---|
-| Fill in missing events by walking `prev`/`auth` references backwards (**Resolve missing**) | `GET /_synapse/admin/v1/fetch_event/{event_id}` |
+| Fill holes in the graph by crawling `prev_events` backwards, in the background and via **Resolve missing** | `GET /_synapse/admin/v1/fetch_event/{event_id}` |
 | Browse and backfill **any room on the server**, not just joined ones | `GET /_synapse/admin/v1/rooms`, `.../rooms/{id}/messages` |
 | Show the server's real forward extremities (double ring) | `GET /_synapse/admin/v1/rooms/{id}/forward_extremities` |
+
+`/messages` and `/sync` never return some events, most importantly
+`org.matrix.dummy_event`, which servers send to merge forks. In busy federated
+rooms (Matrix HQ, for example) that leaves most merge points missing and the
+graph falls apart into loose ends. The gap crawler fetches those events,
+newest first, but only the parents of events above the oldest loaded timeline
+event. Older history stays untouched until **Load older** extends the window,
+so the crawl always finishes. Events the server never received over federation
+stay missing. Set `fill_gaps: false` to turn the background crawl off.
 
 Without admin rights everything else works; events the account can't see
 (before it joined, hidden by history visibility, timeline gaps) appear as

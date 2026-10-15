@@ -42,8 +42,14 @@ matrix:
   # Upper bound of events kept in memory per room. When exceeded, the oldest
   # (lowest depth) events are dropped; the m.room.create event is always kept.
   max_events_per_room: 20000
-  # Maximum events fetched by one "Resolve missing" click (Synapse admin only).
+  # Maximum events fetched by one "Resolve missing" click, and per round of
+  # the background gap crawler (Synapse admin only).
   resolve_budget: 200
+  # /messages and /sync hide some events (notably org.matrix.dummy_event,
+  # which merges forks), leaving holes in the graph. When enabled, a Synapse
+  # admin account crawls prev_events backwards in the background to fill
+  # them, down to the oldest loaded timeline event.
+  fill_gaps: true
 
   # Long-poll timeout for /sync.
   sync_timeout: 30s

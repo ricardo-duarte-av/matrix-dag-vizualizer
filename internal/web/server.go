@@ -261,7 +261,7 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	budget := s.mx.Config().ResolveBudget
-	resolved, remaining, err := s.mx.ResolveMissing(r.Context(), roomID, intQuery(r, "budget", budget, budget*10))
+	resolved, remaining, err := s.mx.FillGaps(r.Context(), roomID, intQuery(r, "budget", budget, budget*10))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

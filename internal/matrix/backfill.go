@@ -37,6 +37,7 @@ func (c *Client) Hydrate(ctx context.Context, roomID string) error {
 		return err
 	}
 	c.store.UpdateRoom(roomID, func(r *dagRoom) { r.Hydrated = true })
+	c.kickCrawl(roomID)
 	return nil
 }
 
@@ -78,8 +79,10 @@ func (c *Client) Backfill(ctx context.Context, roomID string, count int) (int, e
 			}
 			return added, fmt.Errorf("fetching messages: %w", err)
 		}
-		newNodes, _ := c.store.Add(roomID, append(resp.Chunk, resp.State...))
-		added += len(newNodes)
+		// State comes from anywhere in history, so only the chunk moves the floor.
+		chunkNodes, _ := c.store.AddTimeline(roomID, resp.Chunk)
+		stateNodes, _ := c.store.Add(roomID, resp.State)
+		added += len(chunkNodes) + len(stateNodes)
 		seen += len(resp.Chunk)
 
 		done := resp.End == "" || len(resp.Chunk) == 0
@@ -95,57 +98,10 @@ func (c *Client) Backfill(ctx context.Context, roomID string, count int) (int, e
 		}
 	}
 	c.log.Debug().Str("room_id", roomID).Int("added", added).Msg("Backfilled")
+	if added > 0 {
+		c.kickCrawl(roomID)
+	}
 	return added, nil
-}
-
-// ResolveMissing fetches referenced-but-unknown events through the Synapse
-// admin fetch_event API, walking backwards until budget fetches are spent.
-func (c *Client) ResolveMissing(ctx context.Context, roomID string, budget int) (resolved int, remaining int, err error) {
-	if !c.IsAdmin() {
-		return 0, 0, fmt.Errorf("resolving missing events requires Synapse admin")
-	}
-	lock := c.roomLock(roomID)
-	lock.Lock()
-	defer lock.Unlock()
-
-	failed := make(map[string]struct{})
-	for budget > 0 && ctx.Err() == nil {
-		var batch []string
-		for _, id := range c.store.MissingRefs(roomID) {
-			if _, bad := failed[id]; !bad {
-				batch = append(batch, id)
-			}
-			if len(batch) == budget {
-				break
-			}
-		}
-		if len(batch) == 0 {
-			break
-		}
-		budget -= len(batch)
-		results := c.fetchEvents(ctx, batch)
-		var events []json.RawMessage
-		var ids []string
-		for i, res := range results {
-			if res.err != nil {
-				failed[batch[i]] = struct{}{}
-				if isForbidden(res.err) {
-					c.admin.Store(false)
-					return resolved, len(c.store.MissingRefs(roomID)), res.err
-				}
-				c.log.Debug().Err(res.err).Str("event_id", batch[i]).Msg("fetch_event failed")
-				continue
-			}
-			events = append(events, res.raw)
-			ids = append(ids, batch[i])
-		}
-		added, _ := c.store.Add(roomID, events, ids...)
-		resolved += len(added)
-		if len(added) == 0 {
-			break
-		}
-	}
-	return resolved, len(c.store.MissingRefs(roomID)), ctx.Err()
 }
 
 // ResolveEvent fetches a single referenced-but-unknown event through the

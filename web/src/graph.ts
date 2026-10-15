@@ -122,8 +122,10 @@ export class DagView {
     const prev = this.opts;
     this.opts = { ...this.opts, ...patch };
     if (patch.colorBy && patch.colorBy !== prev.colorBy) this.recolor();
-    if (patch.showAuth !== undefined) {
+    if (patch.showAuth !== undefined && patch.showAuth !== prev.showAuth) {
       this.cy.edges(".auth").toggleClass("hidden", !this.opts.showAuth);
+      this.markAuthOnly();
+      this.layout(false);
     }
     if (patch.showIds !== undefined && patch.showIds !== prev.showIds) {
       this.cy.style(this.stylesheet());
@@ -152,6 +154,7 @@ export class DagView {
       for (const id of data.missing) this.ensureMissing(id);
       this.addEdges(data.nodes);
       this.markExtremities(data.extremities, data.server_extremities);
+      this.markAuthOnly();
     });
     this.layout(true);
   }
@@ -172,6 +175,7 @@ export class DagView {
         for (const ref of [...n.prev, ...n.auth]) this.ensureMissing(ref);
       }
       this.addEdges(fresh);
+      this.markAuthOnly();
       // Recompute "computed" extremities: nodes without children.
       this.cy.nodes(".extremity").removeClass("extremity");
       this.cy
@@ -250,6 +254,16 @@ export class DagView {
     this.cy.add(edges);
   }
 
+  /**
+   * Missing events referenced only through auth_events would float
+   * unconnected while auth edges are hidden, so hide them along with those.
+   */
+  private markAuthOnly() {
+    this.cy.nodes(".missing").forEach((m) => {
+      m.toggleClass("hidden", !this.opts.showAuth && m.outgoers("edge.prev").empty());
+    });
+  }
+
   private markExtremities(computed: string[], server?: string[]) {
     for (const id of computed) this.cy.getElementById(id).addClass("extremity");
     for (const id of server ?? []) this.cy.getElementById(id).addClass("server-extremity");
@@ -312,7 +326,7 @@ export class DagView {
    * sharing a depth, i.e. forks) spread across the other axis. O(n log n).
    */
   private depthLayout() {
-    const nodes = this.cy.nodes();
+    const nodes = this.cy.nodes().not(".hidden");
     // Missing nodes get a depth just above their shallowest child.
     nodes.filter(".missing").forEach((m) => {
       const childDepths = m.outgoers("node").map((c) => c.data("depth") as number).filter((d) => d != null);
@@ -482,7 +496,7 @@ export class DagView {
 
   /** Fit the newest part of the graph rather than the whole history. */
   fitRecent(animate = false) {
-    const nodes = this.cy.nodes().sort((a, b) => (b.data("depth") ?? 0) - (a.data("depth") ?? 0));
+    const nodes = this.cy.nodes().not(".hidden").sort((a, b) => (b.data("depth") ?? 0) - (a.data("depth") ?? 0));
     const eles = nodes.slice(0, this.opts.showIds ? 10 : 60);
     if (animate) this.cy.animate({ fit: { eles, padding: 40 } }, { duration: 300 });
     else this.cy.fit(eles, 40);
