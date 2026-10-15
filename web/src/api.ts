@@ -88,6 +88,11 @@ export const api = {
       `${room(roomId)}/resolve${budget ? `?budget=${budget}` : ""}`,
       { method: "POST" },
     ),
+  resolveEvent: (roomId: string, eventId: string) =>
+    request<{ resolved: number; remaining: number }>(
+      `${room(roomId)}/resolve?id=${encodeURIComponent(eventId)}`,
+      { method: "POST" },
+    ),
   event: (roomId: string, eventId: string) =>
     request<Record<string, unknown>>(`${room(roomId)}/event?id=${encodeURIComponent(eventId)}`),
   stream: (roomId: string) => new EventSource(`${room(roomId)}/stream`),

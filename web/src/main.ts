@@ -226,6 +226,12 @@ function refList(ids: string[], edge: (other: string) => string): string {
     .join("");
 }
 
+/** matrix.to permalink for an event, routed via the account's homeserver. */
+function permalink(eventId: string): string {
+  const via = cfg.user_id.slice(cfg.user_id.indexOf(":") + 1);
+  return `https://matrix.to/#/${encodeURIComponent(currentRoom)}/${encodeURIComponent(eventId)}${via ? `?via=${encodeURIComponent(via)}` : ""}`;
+}
+
 async function showEvent(id: string, missing: boolean) {
   writeHash(currentRoom, id);
   selectedEvent = id;
@@ -233,10 +239,12 @@ async function showEvent(id: string, missing: boolean) {
   els.panel.classList.remove("hidden");
   const n = nodesById.get(id);
   const children = [...nodesById.values()].filter((c) => c.prev.includes(id)).map((c) => c.id);
+  const link = `<dt>Link</dt><dd><a href="${escapeHTML(permalink(id))}" target="_blank" rel="noopener noreferrer">matrix.to</a></dd>`;
   const header = n
     ? `<h2>${escapeHTML(n.type)}</h2>
       <dl>
         <dt>Event</dt><dd>${escapeHTML(n.id)}</dd>
+        ${link}
         <dt>Sender</dt><dd>${escapeHTML(n.sender)}</dd>
         ${n.state_key !== undefined ? `<dt>State key</dt><dd>${escapeHTML(n.state_key || '""')}</dd>` : ""}
         <dt>Depth</dt><dd>${n.depth}</dd>
@@ -246,8 +254,9 @@ async function showEvent(id: string, missing: boolean) {
       <h3>prev_events (${n.prev.length})</h3><ul class="prev">${refList(n.prev, (p) => edgeId("prev", p, id))}</ul>
       <h3>Children (${children.length})</h3><ul class="child">${refList(children, (c) => edgeId("prev", id, c))}</ul>
       <h3>auth_events (${n.auth.length})</h3><ul class="auth">${refList(n.auth, (a) => edgeId("auth", a, id))}</ul>`
-    : `<h2>Missing event</h2><dl><dt>Event</dt><dd>${escapeHTML(id)}</dd></dl>
+    : `<h2>Missing event</h2><dl><dt>Event</dt><dd>${escapeHTML(id)}</dd>${link}</dl>
       <p class="unknown">Referenced by loaded events but not available ${missing && cfg.admin ? "in the graph yet. Use “Resolve missing” to pull it in." : "to this account (before join, history visibility or a gap). Synapse admin access can fill these in."}</p>
+      ${missing && cfg.admin ? `<button id="resolve-one">Resolve this event</button>` : ""}
       <h3>Children (${children.length})</h3><ul class="child">${refList(children, (c) => edgeId("prev", id, c))}</ul>`;
   els.panelBody.innerHTML = `${header}<h3>Raw PDU</h3><pre id="raw">Loading…</pre>`;
   try {
@@ -269,6 +278,21 @@ function focus(id: string): boolean {
   const missing = !nodesById.has(id);
   void showEvent(id, missing);
   return true;
+}
+
+async function resolveOne() {
+  const id = selectedEvent;
+  if (!currentRoom || !id) return;
+  busy("Resolving event via Synapse admin API…");
+  try {
+    const res = await api.resolveEvent(currentRoom, id);
+    await reloadGraph(`Resolved event (${res.remaining} still missing), re-rendering…`);
+    if (!focus(id)) renderStatus("Resolved event is not in the rendered graph");
+  } catch (e) {
+    renderStatus((e as Error).message);
+  } finally {
+    busy(null);
+  }
 }
 
 // ---- Legend & status ----------------------------------------------------------
@@ -396,6 +420,10 @@ async function main() {
     writeHash(currentRoom);
   };
   els.panelBody.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest("#resolve-one")) {
+      void resolveOne();
+      return;
+    }
     const a = (e.target as HTMLElement).closest<HTMLElement>("a[data-event]");
     if (a?.dataset.event && !focus(a.dataset.event)) renderStatus("That event is not loaded in the graph");
   });

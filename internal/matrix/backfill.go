@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"maunium.net/go/mautrix"
@@ -145,6 +146,32 @@ func (c *Client) ResolveMissing(ctx context.Context, roomID string, budget int) 
 		}
 	}
 	return resolved, len(c.store.MissingRefs(roomID)), ctx.Err()
+}
+
+// ResolveEvent fetches a single referenced-but-unknown event through the
+// Synapse admin fetch_event API. It returns how many events are still missing.
+func (c *Client) ResolveEvent(ctx context.Context, roomID, eventID string) (remaining int, err error) {
+	if !c.IsAdmin() {
+		return 0, fmt.Errorf("resolving missing events requires Synapse admin")
+	}
+	lock := c.roomLock(roomID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if !slices.Contains(c.store.MissingRefs(roomID), eventID) {
+		return 0, fmt.Errorf("%s is not a missing event of %s", eventID, roomID)
+	}
+	raw, err := c.FetchEvent(ctx, eventID)
+	if err != nil {
+		if isForbidden(err) {
+			c.admin.Store(false)
+		}
+		return len(c.store.MissingRefs(roomID)), fmt.Errorf("fetching %s: %w", eventID, err)
+	}
+	if _, errs := c.store.Add(roomID, []json.RawMessage{raw}, eventID); len(errs) > 0 {
+		return len(c.store.MissingRefs(roomID)), errs[0]
+	}
+	return len(c.store.MissingRefs(roomID)), nil
 }
 
 type fetchResult struct {

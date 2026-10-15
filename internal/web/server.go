@@ -251,6 +251,15 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("resolving missing events requires Synapse admin"))
 		return
 	}
+	if eventID := r.URL.Query().Get("id"); eventID != "" {
+		remaining, err := s.mx.ResolveEvent(r.Context(), roomID, eventID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"resolved": 1, "remaining": remaining})
+		return
+	}
 	budget := s.mx.Config().ResolveBudget
 	resolved, remaining, err := s.mx.ResolveMissing(r.Context(), roomID, intQuery(r, "budget", budget, budget*10))
 	if err != nil {

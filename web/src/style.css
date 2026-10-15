@@ -151,6 +151,7 @@ main { position: relative; overflow: hidden; min-height: 0; }
 #panel ul.child a { color: var(--edge-child); }
 #panel ul.auth a { color: var(--edge-auth); }
 #panel ul a.unknown { color: var(--muted); }
+#panel #resolve-one { margin-top: 4px; }
 #panel pre {
   font-size: 11px;
   background: var(--bg);
