@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/ricardo-duarte-av/matrix-dag-vizualizer/internal/dag"
 )
 
 // The client-server API hides some events from /messages and /sync, notably
@@ -99,13 +101,31 @@ func (c *Client) FillGaps(ctx context.Context, roomID string, budget int) (resol
 			break
 		}
 		budget -= len(batch)
-		n, err := c.fetchInto(ctx, roomID, st, batch)
-		resolved += n
+		added, err := c.fetchInto(ctx, roomID, st, batch)
+		resolved += len(added)
 		if err != nil {
+			c.store.Notify(roomID, fmt.Sprintf("Gap crawl stopped: %v", err))
 			return resolved, len(c.pendingGaps(roomID, st, 0)), err
 		}
+		dummies := 0
+		for _, n := range added {
+			if n.Type == "org.matrix.dummy_event" {
+				dummies++
+			}
+		}
+		c.store.Notify(roomID, fmt.Sprintf("Gap crawl: fetched %d, added %d (%d dummy events), %d not on server; %d gaps left",
+			len(batch), len(added), dummies, len(batch)-len(added), len(c.pendingGaps(roomID, st, 0))))
 	}
-	return resolved, len(c.pendingGaps(roomID, st, 0)), ctx.Err()
+	remaining = len(c.pendingGaps(roomID, st, 0))
+	if remaining == 0 && resolved > 0 {
+		info, _ := c.store.Room(roomID)
+		msg := fmt.Sprintf("Gap crawl done: every hole above depth %d is filled", info.Floor)
+		if unavailable := len(c.store.Gaps(roomID)); unavailable > 0 {
+			msg = fmt.Sprintf("Gap crawl done: %d events above depth %d are not on the server and stay missing", unavailable, info.Floor)
+		}
+		c.store.Notify(roomID, msg)
+	}
+	return resolved, remaining, ctx.Err()
 }
 
 // pendingGaps returns up to limit (0 = all) gaps not known to be unfetchable.
@@ -127,7 +147,7 @@ func (c *Client) pendingGaps(roomID string, st *crawlState, limit int) []string 
 
 // fetchInto fetches ids into the room. Every id ends up either in the store
 // or in st.failed, so repeated calls always make progress.
-func (c *Client) fetchInto(ctx context.Context, roomID string, st *crawlState, ids []string) (int, error) {
+func (c *Client) fetchInto(ctx context.Context, roomID string, st *crawlState, ids []string) ([]*dag.Node, error) {
 	results := c.fetchEvents(ctx, ids)
 	var events []json.RawMessage
 	var eventIDs []string
@@ -153,11 +173,11 @@ func (c *Client) fetchInto(ctx context.Context, roomID string, st *crawlState, i
 	added, _ := c.store.Add(roomID, events, eventIDs...)
 	lock.Unlock()
 	if fatal != nil {
-		return len(added), fatal
+		return added, fatal
 	}
 	if ctx.Err() != nil {
 		// Cancelled fetches say nothing about whether the event exists.
-		return len(added), ctx.Err()
+		return added, ctx.Err()
 	}
 	st.mu.Lock()
 	for _, id := range ids {
@@ -166,7 +186,7 @@ func (c *Client) fetchInto(ctx context.Context, roomID string, st *crawlState, i
 		}
 	}
 	st.mu.Unlock()
-	return len(added), nil
+	return added, nil
 }
 
 func inRoom(raw json.RawMessage, roomID string) bool {

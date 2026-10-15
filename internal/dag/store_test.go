@@ -59,17 +59,17 @@ func TestSnapshotMissingAndExtremities(t *testing.T) {
 
 func TestAddDeduplicatesAndPublishes(t *testing.T) {
 	s := NewStore(100)
-	ch, cancel := s.Subscribe("!r")
+	sub, cancel := s.Subscribe("!r")
 	defer cancel()
 	s.Add("!r", []json.RawMessage{pdu("$a", 1, nil, nil)})
 	added, _ := s.Add("!r", []json.RawMessage{pdu("$a", 1, nil, nil), pdu("$b", 2, []string{"$a"}, nil)})
 	if len(added) != 1 || added[0].ID != "$b" {
 		t.Fatalf("added = %+v", added)
 	}
-	if u := <-ch; len(u.Nodes) != 1 || u.Nodes[0].ID != "$a" {
+	if u := <-sub.C; len(u.Nodes) != 1 || u.Nodes[0].ID != "$a" {
 		t.Errorf("first update = %+v", u)
 	}
-	if u := <-ch; len(u.Nodes) != 1 || u.Nodes[0].ID != "$b" {
+	if u := <-sub.C; len(u.Nodes) != 1 || u.Nodes[0].ID != "$b" {
 		t.Errorf("second update = %+v", u)
 	}
 }
@@ -144,5 +144,20 @@ func TestEvictionRaisesFloor(t *testing.T) {
 	}
 	if got := s.Gaps("!r"); len(got) != 0 {
 		t.Fatalf("gaps = %v, would re-fetch evicted events", got)
+	}
+}
+
+func TestSlowSubscriberIsMarkedLagged(t *testing.T) {
+	s := NewStore(100000)
+	sub, cancel := s.Subscribe("!r")
+	defer cancel()
+	for i := range cap(sub.ch) + 1 {
+		s.Notify("!r", fmt.Sprint(i))
+	}
+	if !sub.Lagged() {
+		t.Fatal("dropped update not reported")
+	}
+	if sub.Lagged() {
+		t.Fatal("Lagged should clear once read")
 	}
 }

@@ -10,6 +10,7 @@ in a web UI (TypeScript + [Cytoscape.js](https://js.cytoscape.org/) + [ELK](http
 - Click an event for its full PDU JSON, parents, children and auth events
 - Colour by event type or sender, optional auth-edge overlay, dark/light theme
 - Shareable URLs (`#room=!id&event=$id`)
+- Activity console (bottom right) showing backfill, gap crawling and stream progress
 
 ## How it gets the DAG
 

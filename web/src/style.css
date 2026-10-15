@@ -42,7 +42,7 @@
 html, body { height: 100%; margin: 0; }
 body {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr auto auto;
   background: var(--bg);
   color: var(--fg);
   font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -169,14 +169,50 @@ a:hover { text-decoration: underline; }
 
 footer {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
+  align-items: center;
+  gap: 8px;
   padding: 4px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-2);
   color: var(--muted);
   font-size: 12px;
 }
+#status { display: flex; flex-wrap: wrap; gap: 4px 16px; flex: 1; min-width: 0; }
+#console-toggle { padding: 1px 8px; font-size: 12px; }
+#console-toggle.unread::after { content: " •"; color: var(--accent); }
+#console-toggle.open { border-color: var(--accent); }
+
+#console {
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.console-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 4px 2px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+}
+#console-log {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 4px 12px;
+  list-style: none;
+  font: 11px/1.5 ui-monospace, monospace;
+}
+#console-log li { white-space: pre-wrap; word-break: break-word; }
+#console-log time { color: var(--muted); margin-right: 8px; }
+#console-log .src { display: inline-block; width: 6ch; color: var(--muted); }
+#console-log .server .src { color: var(--edge); }
+#console-log .error { color: var(--danger); }
 footer .badge { color: var(--accent); font-weight: 600; }
 footer .live { color: #16a34a; }
 

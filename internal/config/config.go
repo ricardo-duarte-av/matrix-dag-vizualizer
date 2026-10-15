@@ -74,7 +74,7 @@ func Default() Config {
 	return Config{
 		Matrix: MatrixConfig{
 			DeviceName:       "Matrix DAG Visualizer",
-			InitialBackfill:  500,
+			InitialBackfill:  100,
 			BackfillPageSize: 100,
 			MaxEventsPerRoom: 20000,
 			ResolveBudget:    200,

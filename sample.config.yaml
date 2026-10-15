@@ -35,8 +35,11 @@ matrix:
   # Automatically accept room invites sent to the account.
   auto_join_invites: false
 
-  # Events fetched (via /messages) the first time a room is opened.
-  initial_backfill: 500
+  # Events fetched (via /messages) the first time a room is opened. Keep it
+  # small: the gap crawler then fills everything hidden inside that window,
+  # which in busy federated rooms can be several times as many events. Use
+  # "Load older" to extend the window.
+  initial_backfill: 100
   # Page size for /messages pagination (1-1000).
   backfill_page_size: 100
   # Upper bound of events kept in memory per room. When exceeded, the oldest

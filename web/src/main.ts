@@ -28,13 +28,19 @@ const els = {
   panelFocus: $<HTMLButtonElement>("panel-focus"),
   panelClose: $("panel-close"),
   status: $("status"),
+  console: $("console"),
+  consoleLog: $("console-log"),
+  consoleToggle: $<HTMLButtonElement>("console-toggle"),
+  consoleClear: $<HTMLButtonElement>("console-clear"),
   dialog: $<HTMLDialogElement>("server-dialog"),
   serverSearch: $<HTMLInputElement>("server-search"),
   serverList: $("server-list"),
 };
 
 const PREFS_KEY = "dagviz.prefs";
-type Prefs = Partial<Pick<ViewOptions, "layout" | "direction" | "colorBy" | "showAuth" | "showIds">>;
+type Prefs = Partial<Pick<ViewOptions, "layout" | "direction" | "colorBy" | "showAuth" | "showIds">> & {
+  console?: boolean;
+};
 
 function loadPrefs(): Prefs {
   try {
@@ -58,6 +64,8 @@ let roomInfo: RoomInfo | null = null;
 let stream: EventSource | null = null;
 let stats = { nodes: 0, missing: 0, truncated: false, serverExt: 0, liveCount: 0 };
 const nodesById = new Map<string, DagNode>();
+/** Live nodes that arrived while a graph load was in flight, applied after it. */
+let pendingLive: DagNode[] | null = null;
 
 function busy(text: string | null) {
   els.loading.classList.toggle("hidden", text === null);
@@ -67,6 +75,40 @@ function busy(text: string | null) {
 function escapeHTML(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
+
+// ---- Console ----------------------------------------------------------------
+
+const CONSOLE_MAX = 500;
+
+/** Appends a line to the activity console. */
+function log(msg: string, opts: { source?: "ui" | "server"; error?: boolean } = {}) {
+  const li = document.createElement("li");
+  li.className = [opts.source ?? "ui", opts.error ? "error" : ""].join(" ");
+  const time = document.createElement("time");
+  time.textContent = new Date().toLocaleTimeString();
+  const src = document.createElement("span");
+  src.className = "src";
+  src.textContent = opts.source ?? "ui";
+  li.append(time, src, msg);
+  const box = els.consoleLog;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+  box.append(li);
+  while (box.childElementCount > CONSOLE_MAX) box.firstElementChild!.remove();
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  if (els.console.classList.contains("hidden")) els.consoleToggle.classList.add("unread");
+}
+
+function setConsole(open: boolean) {
+  els.console.classList.toggle("hidden", !open);
+  els.consoleToggle.classList.toggle("open", open);
+  if (open) {
+    els.consoleToggle.classList.remove("unread");
+    els.consoleLog.scrollTop = els.consoleLog.scrollHeight;
+  }
+  savePrefs({ console: open });
+}
+
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
 function applyTheme() {
   if (cfg.theme === "auto") delete document.documentElement.dataset.theme;
@@ -122,16 +164,32 @@ async function openRoom(roomId: string, focusEvent?: string) {
     if (![...els.room.options].some((o) => o.value === roomId)) els.room.append(new Option(roomId, roomId));
     els.room.value = roomId;
   }
+  log(`Opening ${roomId}`);
+  // Subscribe before loading: the server starts backfilling and crawling as
+  // soon as the graph is requested, and those events must not be missed.
+  await connectStream();
   await reloadGraph("Loading event graph…");
   if (focusEvent) focus(focusEvent);
-  connectStream();
 }
+
+let loadingGraph = false;
+let reloadQueued = false;
 
 async function reloadGraph(message: string) {
   if (!currentRoom) return;
+  // A reload requested mid-load runs once the current one finishes, so only
+  // one load at a time owns pendingLive.
+  if (loadingGraph) {
+    reloadQueued = true;
+    return;
+  }
+  loadingGraph = true;
   busy(message);
+  pendingLive = [];
   try {
+    const t0 = performance.now();
     const data = await api.dag(currentRoom, cfg.max_render_nodes);
+    const t1 = performance.now();
     roomInfo = data.room;
     nodesById.clear();
     for (const n of data.nodes) nodesById.set(n.id, n);
@@ -144,35 +202,84 @@ async function reloadGraph(message: string) {
     };
     setAdmin(data.admin);
     view.load(data);
+    log(
+      `Graph: ${data.nodes.length} events${data.truncated ? ` (newest ${cfg.max_render_nodes})` : ""}, ` +
+        `${data.missing.length} missing, ${data.extremities.length} loose ends` +
+        (data.server_extremities ? ` (server has ${data.server_extremities.length})` : "") +
+        `; fetched in ${seconds(t1 - t0)}, rendered in ${seconds(performance.now() - t1)}`,
+    );
+    const buffered = pendingLive;
+    pendingLive = null;
+    if (buffered.length) applyLive(buffered);
     renderLegend();
     renderStatus();
   } catch (e) {
     renderStatus(`Failed to load room: ${(e as Error).message}`);
   } finally {
+    pendingLive = null;
+    loadingGraph = false;
     busy(null);
+  }
+  if (reloadQueued) {
+    reloadQueued = false;
+    await reloadGraph("Catching up…");
   }
 }
 
-function connectStream() {
+/** Adds streamed events to the graph. */
+function applyLive(nodes: DagNode[]) {
+  for (const n of nodes) nodesById.set(n.id, n);
+  const added = view.addLive(nodes);
+  if (!added) return;
+  stats.nodes += added;
+  stats.liveCount += added;
+  renderLegend();
+  renderStatus();
+  // The panel lists references as loaded or not; refresh it if one just arrived.
+  if (selectedEvent && nodes.some((n) => n.id === selectedEvent || n.prev.includes(selectedEvent!) || nodesById.get(selectedEvent!)?.prev.includes(n.id))) {
+    void showEvent(selectedEvent, !nodesById.has(selectedEvent));
+  }
+}
+
+/** Opens the live stream; resolves once it is connected (or gave up waiting). */
+function connectStream(): Promise<void> {
   stream?.close();
   stream = null;
   if (!currentRoom || !els.live.checked) {
     renderStatus();
-    return;
+    return Promise.resolve();
   }
   const s = api.stream(currentRoom);
+  let dropped = false;
   s.addEventListener("nodes", (ev) => {
     const nodes = JSON.parse((ev as MessageEvent).data) as DagNode[];
-    for (const n of nodes) nodesById.set(n.id, n);
-    const added = view.addLive(nodes);
-    stats.nodes += added;
-    stats.liveCount += added;
-    renderLegend();
-    renderStatus();
+    if (pendingLive) pendingLive.push(...nodes);
+    else applyLive(nodes);
   });
-  s.onopen = () => renderStatus();
-  s.onerror = () => renderStatus();
+  s.addEventListener("log", (ev) => log(JSON.parse((ev as MessageEvent).data) as string, { source: "server" }));
+  s.addEventListener("resync", () => {
+    log("Live stream fell behind; reloading the graph");
+    void reloadGraph("Catching up…");
+  });
+  s.onopen = () => {
+    renderStatus();
+    if (dropped) {
+      dropped = false;
+      log("Live stream reconnected; reloading the graph to catch up");
+      void reloadGraph("Catching up…");
+    }
+  };
+  s.onerror = () => {
+    if (!dropped) log("Live stream disconnected, retrying…", { error: true });
+    dropped = true;
+    renderStatus();
+  };
   stream = s;
+  return new Promise((resolve) => {
+    s.addEventListener("open", () => resolve(), { once: true });
+    s.addEventListener("error", () => resolve(), { once: true });
+    setTimeout(resolve, 3000);
+  });
 }
 
 // ---- Server rooms dialog (Synapse admin) -----------------------------------
@@ -284,6 +391,7 @@ async function resolveOne() {
   const id = selectedEvent;
   if (!currentRoom || !id) return;
   busy("Resolving event via Synapse admin API…");
+  log(`Resolving ${id}`);
   try {
     const res = await api.resolveEvent(currentRoom, id);
     await reloadGraph(`Resolved event (${res.remaining} still missing), re-rendering…`);
@@ -325,7 +433,10 @@ function renderLegend() {
 
 function renderStatus(error?: string) {
   const parts: string[] = [];
-  if (error) parts.push(`<span class="error">${escapeHTML(error)}</span>`);
+  if (error) {
+    parts.push(`<span class="error">${escapeHTML(error)}</span>`);
+    log(error, { error: true });
+  }
   parts.push(`${escapeHTML(cfg.user_id)} @ ${escapeHTML(cfg.homeserver)}`);
   if (cfg.admin) parts.push(`<span class="badge">Synapse admin</span>`);
   if (currentRoom && roomInfo) {
@@ -407,7 +518,11 @@ async function main() {
     view.setOptions({ showIds: els.showIds.checked });
     savePrefs({ showIds: els.showIds.checked });
   };
-  els.live.onchange = () => connectStream();
+  els.live.onchange = async () => {
+    await connectStream();
+    // Events that arrived while live was off were not streamed.
+    if (els.live.checked) await reloadGraph("Catching up…");
+  };
   els.fit.onclick = () => view.fitAll();
   els.latest.onclick = () => view.fitRecent(true);
   els.panelFocus.onclick = () => {
@@ -445,6 +560,7 @@ async function main() {
     if (!currentRoom) return;
     busy("Fetching older history…");
     try {
+      log("Requesting older history");
       const res = await api.backfill(currentRoom, 500);
       await reloadGraph(`Added ${res.added} events, re-rendering…`);
     } catch (e) {
@@ -456,6 +572,7 @@ async function main() {
   els.resolve.onclick = async () => {
     if (!currentRoom) return;
     busy("Filling gaps via Synapse admin API…");
+    log("Filling gaps on request");
     try {
       const res = await api.resolve(currentRoom);
       await reloadGraph(`Resolved ${res.resolved} events (${res.remaining} gaps left), re-rendering…`);
@@ -465,6 +582,10 @@ async function main() {
       busy(null);
     }
   };
+
+  setConsole(!!prefs.console);
+  els.consoleToggle.onclick = () => setConsole(els.console.classList.contains("hidden"));
+  els.consoleClear.onclick = () => els.consoleLog.replaceChildren();
 
   els.serverRooms.onclick = () => {
     els.dialog.showModal();

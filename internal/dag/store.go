@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Room is the known portion of a single room's event graph.
@@ -29,11 +30,24 @@ type Room struct {
 	Floor int64
 }
 
-// Update is pushed to subscribers whenever new events are added to a room.
+// Update is pushed to subscribers whenever new events are added to a room,
+// or carries a progress message (Log) about work on the room.
 type Update struct {
 	RoomID string  `json:"room_id"`
-	Nodes  []*Node `json:"nodes"`
+	Nodes  []*Node `json:"nodes,omitempty"`
+	Log    string  `json:"log,omitempty"`
 }
+
+// Subscription receives a room's updates. If the subscriber falls behind,
+// updates are dropped and Lagged reports true until it is read.
+type Subscription struct {
+	C      <-chan Update
+	ch     chan Update
+	lagged atomic.Bool
+}
+
+// Lagged reports (and clears) whether updates were dropped since the last call.
+func (s *Subscription) Lagged() bool { return s.lagged.Swap(false) }
 
 // Store is a concurrency-safe collection of rooms.
 type Store struct {
@@ -42,14 +56,14 @@ type Store struct {
 	maxNodes int
 
 	subMu sync.Mutex
-	subs  map[string]map[chan Update]struct{}
+	subs  map[string]map[*Subscription]struct{}
 }
 
 func NewStore(maxNodesPerRoom int) *Store {
 	return &Store{
 		rooms:    make(map[string]*Room),
 		maxNodes: maxNodesPerRoom,
-		subs:     make(map[string]map[chan Update]struct{}),
+		subs:     make(map[string]map[*Subscription]struct{}),
 	}
 }
 
@@ -357,18 +371,24 @@ func sortedKeys(m map[string]struct{}) []string {
 	return out
 }
 
-// Subscribe returns a channel receiving updates for a room, and a cancel func.
-func (s *Store) Subscribe(roomID string) (<-chan Update, func()) {
-	ch := make(chan Update, 64)
+// Notify sends a progress message to a room's subscribers.
+func (s *Store) Notify(roomID, msg string) {
+	s.publish(Update{RoomID: roomID, Log: msg})
+}
+
+// Subscribe returns a subscription to a room's updates, and a cancel func.
+func (s *Store) Subscribe(roomID string) (*Subscription, func()) {
+	ch := make(chan Update, 256)
+	sub := &Subscription{C: ch, ch: ch}
 	s.subMu.Lock()
 	if s.subs[roomID] == nil {
-		s.subs[roomID] = make(map[chan Update]struct{})
+		s.subs[roomID] = make(map[*Subscription]struct{})
 	}
-	s.subs[roomID][ch] = struct{}{}
+	s.subs[roomID][sub] = struct{}{}
 	s.subMu.Unlock()
-	return ch, func() {
+	return sub, func() {
 		s.subMu.Lock()
-		delete(s.subs[roomID], ch)
+		delete(s.subs[roomID], sub)
 		if len(s.subs[roomID]) == 0 {
 			delete(s.subs, roomID)
 		}
@@ -379,10 +399,11 @@ func (s *Store) Subscribe(roomID string) (<-chan Update, func()) {
 func (s *Store) publish(u Update) {
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
-	for ch := range s.subs[u.RoomID] {
+	for sub := range s.subs[u.RoomID] {
 		select {
-		case ch <- u:
-		default: // slow consumer; it can reload the full graph
+		case sub.ch <- u:
+		default: // slow consumer; it is told to reload the full graph
+			sub.lagged.Store(true)
 		}
 	}
 }

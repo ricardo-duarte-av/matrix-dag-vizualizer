@@ -33,6 +33,7 @@ func (c *Client) Hydrate(ctx context.Context, roomID string) error {
 			})
 		}
 	}
+	c.store.Notify(roomID, fmt.Sprintf("Initial backfill: requesting %d events", c.cfg.InitialBackfill))
 	if _, err := c.Backfill(ctx, roomID, c.cfg.InitialBackfill); err != nil {
 		return err
 	}
@@ -98,6 +99,12 @@ func (c *Client) Backfill(ctx context.Context, roomID string, count int) (int, e
 		}
 	}
 	c.log.Debug().Str("room_id", roomID).Int("added", added).Msg("Backfilled")
+	info, _ = c.store.Room(roomID)
+	msg := fmt.Sprintf("Backfill: added %d events (%d timeline events seen), oldest loaded depth is now %d", added, seen, info.Floor)
+	if info.BackfillDone {
+		msg += "; start of history reached"
+	}
+	c.store.Notify(roomID, msg)
 	if added > 0 {
 		c.kickCrawl(roomID)
 	}
@@ -114,6 +121,7 @@ func (c *Client) ResolveEvent(ctx context.Context, roomID, eventID string) (rema
 	lock.Lock()
 	defer lock.Unlock()
 
+	c.store.Notify(roomID, "Resolving "+eventID)
 	if !slices.Contains(c.store.MissingRefs(roomID), eventID) {
 		return 0, fmt.Errorf("%s is not a missing event of %s", eventID, roomID)
 	}

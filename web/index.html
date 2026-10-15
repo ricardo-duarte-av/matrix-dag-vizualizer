@@ -59,7 +59,18 @@
       </aside>
     </main>
 
-    <footer id="status"></footer>
+    <section id="console" class="hidden" aria-label="Activity log">
+      <div class="console-head">
+        <span>Activity</span>
+        <button id="console-clear" class="icon" title="Clear">⌫</button>
+      </div>
+      <ol id="console-log"></ol>
+    </section>
+
+    <footer>
+      <div id="status"></div>
+      <button id="console-toggle" title="Show what the visualizer and server are doing">Console</button>
+    </footer>
 
     <dialog id="server-dialog">
       <form method="dialog" class="dialog-head">

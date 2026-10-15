@@ -2,6 +2,7 @@
 package web
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -104,6 +105,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeJSONGzip is writeJSON, gzip-compressed when the client accepts it.
+// DAG snapshots are large and compress roughly tenfold.
+func writeJSONGzip(w http.ResponseWriter, r *http.Request, v any) {
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		writeJSON(w, http.StatusOK, v)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Add("Vary", "Accept-Encoding")
+	gz := gzip.NewWriter(w)
+	_ = json.NewEncoder(gz).Encode(v)
+	_ = gz.Close()
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
@@ -224,7 +240,7 @@ func (s *Server) handleDAG(w http.ResponseWriter, r *http.Request) {
 			s.log.Debug().Err(err).Msg("Failed to fetch forward extremities")
 		}
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSONGzip(w, r, resp)
 }
 
 func (s *Server) handleBackfill(w http.ResponseWriter, r *http.Request) {
@@ -304,7 +320,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errors.New("streaming unsupported"))
 		return
 	}
-	updates, cancel := s.store.Subscribe(roomID)
+	sub, cancel := s.store.Subscribe(roomID)
 	defer cancel()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -323,15 +339,31 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ping.C:
+			if sub.Lagged() {
+				w.Write([]byte("event: resync\ndata: {}\n\n"))
+			}
 			w.Write([]byte(": ping\n\n"))
-		case u := <-updates:
-			data, _ := json.Marshal(u.Nodes)
-			w.Write([]byte("event: nodes\ndata: "))
-			w.Write(data)
-			w.Write([]byte("\n\n"))
+		case u := <-sub.C:
+			if sub.Lagged() {
+				w.Write([]byte("event: resync\ndata: {}\n\n"))
+			}
+			if len(u.Nodes) > 0 {
+				data, _ := json.Marshal(u.Nodes)
+				writeSSE(w, "nodes", data)
+			}
+			if u.Log != "" {
+				data, _ := json.Marshal(u.Log)
+				writeSSE(w, "log", data)
+			}
 		}
 		flusher.Flush()
 	}
+}
+
+func writeSSE(w http.ResponseWriter, event string, data []byte) {
+	w.Write([]byte("event: " + event + "\ndata: "))
+	w.Write(data)
+	w.Write([]byte("\n\n"))
 }
 
 // Serve runs the HTTP server until ctx is cancelled.
