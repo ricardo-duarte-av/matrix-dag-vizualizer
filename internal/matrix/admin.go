@@ -60,6 +60,20 @@ func (c *Client) FetchEvent(ctx context.Context, eventID string) (json.RawMessag
 	return resp.Event, nil
 }
 
+// FetchRoomEvent fetches an event like FetchEvent, but only returns it when it
+// belongs to roomID: fetch_event looks events up by ID alone, which would
+// otherwise leak events of rooms outside the allowlist.
+func (c *Client) FetchRoomEvent(ctx context.Context, roomID, eventID string) (json.RawMessage, error) {
+	raw, err := c.FetchEvent(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+	if !inRoom(raw, roomID) {
+		return nil, fmt.Errorf("event %s is not in room %s", eventID, roomID)
+	}
+	return raw, nil
+}
+
 // Extremities returns the server's forward extremities of a room.
 func (c *Client) Extremities(ctx context.Context, roomID string) ([]string, error) {
 	var resp struct {

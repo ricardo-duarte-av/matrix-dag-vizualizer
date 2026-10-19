@@ -303,7 +303,7 @@ func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request) {
 	raw, found := s.store.Raw(roomID, eventID)
 	if !found && s.mx.IsAdmin() {
 		var err error
-		if raw, err = s.mx.FetchEvent(r.Context(), eventID); err == nil {
+		if raw, err = s.mx.FetchRoomEvent(r.Context(), roomID, eventID); err == nil {
 			found = true
 		}
 	}
